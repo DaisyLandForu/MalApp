@@ -1,0 +1,52 @@
+﻿{
+    "schema_version":  "malapp.model_b_remote_fingerprint.v1",
+    "created_at_utc":  "2026-08-05T04:42:12.718758+00:00",
+    "host":  {
+                 "hostname":  "pro-node2",
+                 "platform":  "Linux-3.10.0-693.el7.x86_64-x86_64-with-centos-7.9.2009-Core",
+                 "python":  "3.6.8 (default, Nov 14 2023, 16:29:52) \n[GCC 4.8.5 20150623 (Red Hat 4.8.5-44)]"
+             },
+    "model_directory":  "/models/Qwen3-14B",
+    "model_directory_exists":  false,
+    "model_config":  null,
+    "generation_config":  null,
+    "tokenizer_config":  null,
+    "metadata_files":  [
+
+                       ],
+    "weight_files":  [
+
+                     ],
+    "weight_file_count":  0,
+    "weight_bytes_total":  0,
+    "weight_manifest_sha256":  null,
+    "packages":  {
+                     "vllm":  null,
+                     "transformers":  null,
+                     "tokenizers":  null,
+                     "torch":  null,
+                     "safetensors":  null,
+                     "huggingface-hub":  null
+                 },
+    "vllm_processes":  [
+                           {
+                               "pid":  26182,
+                               "cmdline":  "python -m vllm.entrypoints.openai.api_server --host 0.0.0.0 --port 8000 --model /data/hcf/DeepSeek-R1-Distill-Qwen-7B --served-model-name deepseek-b --max-model-len 4096 --gpu-memory-utilization 0.86 --trust-remote-code --enforce-eager",
+                               "environment_allowlist":  {
+                                                             "NVIDIA_VISIBLE_DEVICES":  "2"
+                                                         }
+                           },
+                           {
+                               "pid":  26210,
+                               "cmdline":  "python -m vllm.entrypoints.openai.api_server --host 0.0.0.0 --port 8000 --model /data/qlr/audio_anti_fraud_nlp/model/pretrained/Qwen3-30B-A3B-Instruct-2507-FP8 --served-model-name qwen-a --tensor-parallel-size 2 --max-model-len 4096 --gpu-memory-utilization 0.86 --trust-remote-code --enforce-eager --disable-custom-all-reduce",
+                               "environment_allowlist":  {
+                                                             "NVIDIA_VISIBLE_DEVICES":  "0,1"
+                                                         }
+                           }
+                       ],
+    "gpu":  {
+                "returncode":  0,
+                "stdout":  "0, NVIDIA GeForce RTX 4090, GPU-f3481031-0be1-3e8a-0d99-06a61a3553c6, 530.30.02, 24564 MiB\n1, NVIDIA GeForce RTX 4090, GPU-5f66d157-577a-1b4b-0a2f-0c3885c19dea, 530.30.02, 24564 MiB\n2, NVIDIA GeForce RTX 4090, GPU-a44a9aaa-2383-6257-dd9d-210a092d304a, 530.30.02, 24564 MiB\n3, NVIDIA GeForce RTX 4090, GPU-a2e82189-0e46-0674-500b-5ddc6cd7da94, 530.30.02, 24564 MiB",
+                "stderr":  ""
+            }
+}

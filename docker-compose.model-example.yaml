@@ -1,0 +1,50 @@
+# Optional example only. Use it on a Linux NVIDIA GPU server after replacing
+# the model paths and image tag with versions validated in your environment.
+services:
+  model-a:
+    image: vllm/vllm-openai:latest
+    command:
+      - --model
+      - /models/model-a
+      - --served-model-name
+      - model-a
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --enable-auto-tool-choice
+      - --tool-call-parser
+      - hermes
+    volumes:
+      - ./models/model-a:/models/model-a:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  model-b:
+    image: vllm/vllm-openai:latest
+    command:
+      - --model
+      - /models/model-b
+      - --served-model-name
+      - model-b
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --enable-auto-tool-choice
+      - --tool-call-parser
+      - hermes
+    volumes:
+      - ./models/model-b:/models/model-b:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

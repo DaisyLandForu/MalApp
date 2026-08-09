@@ -1,0 +1,127 @@
+{
+  "version": "1.0.0",
+  "output_schema": {
+    "agent": "string",
+    "claim": "string",
+    "risk_score": "number[0,1]",
+    "confidence": "number[0,1]",
+    "evidence_strength": "number[0,1]",
+    "evidence": [
+      {
+        "evidence_type": "string",
+        "source_fields": ["string"],
+        "source_values": ["string"],
+        "direction": "supports_malicious|supports_benign|context",
+        "strength": "number[0,1]",
+        "description": "string"
+      }
+    ],
+    "missing_fields": ["string"]
+  },
+  "agents": {
+    "static_analysis": {
+      "required_field_groups": [
+        ["signature_status", "certificate_fingerprint", "cert_sha1", "cert_sha256"],
+        ["packer", "sdk_list", "file_type", "platform"],
+        ["engine_a_score", "engine_b_score"]
+      ],
+      "evidence_types": {
+        "signature_anomaly": {
+          "fields": ["signature_status", "certificate_fingerprint", "cert_sha1", "cert_sha256"],
+          "description": "签名缺失、无效、错配或证书异常"
+        },
+        "packer_or_obfuscation": {
+          "fields": ["packer"],
+          "description": "检测到加固、壳或混淆迹象"
+        },
+        "sdk_risk": {
+          "fields": ["sdk_list"],
+          "description": "第三方 SDK 或 SDK 组合存在风险"
+        },
+        "file_or_platform_risk": {
+          "fields": ["file_type", "platform", "file_deleted"],
+          "description": "安装包类型、平台或文件状态异常"
+        },
+        "engine_static_conflict": {
+          "fields": ["engine_a_score", "engine_b_score", "engine_a_label", "engine_b_label", "conflict_type"],
+          "description": "两个检测引擎的静态结论或评分冲突"
+        }
+      }
+    },
+    "threat_intel": {
+      "required_field_groups": [
+        ["control_url", "download_url"],
+        ["control_mailbox", "control_phone"],
+        ["virus_name", "hacker_group"]
+      ],
+      "evidence_types": {
+        "control_infrastructure": {
+          "fields": ["control_url", "control_url_md5", "control_mailbox", "control_phone"],
+          "description": "发现控制端地址、邮箱或手机号"
+        },
+        "download_infrastructure": {
+          "fields": ["download_url", "download_url_md5"],
+          "description": "发现下载或投递基础设施"
+        },
+        "malware_family": {
+          "fields": ["virus_name", "virus_description", "hacker_group"],
+          "description": "病毒家族、恶意描述或黑客组织关联"
+        },
+        "fraud_intelligence": {
+          "fields": ["anti_fraud_tag", "fraud_flag", "fraud_category_big", "fraud_category_small", "fraud_family"],
+          "description": "反诈或涉诈情报标签命中"
+        }
+      }
+    },
+    "impersonation": {
+      "required_field_groups": [
+        ["fake_app", "impersonation_flag", "app_version_status"],
+        ["official_app_name", "official_pkg", "official_md5"],
+        ["official_icon", "impersonation_level1", "impersonation_level2", "impersonation_level3"]
+      ],
+      "evidence_types": {
+        "declared_impersonation": {
+          "fields": ["fake_app", "impersonation_flag", "app_version_status"],
+          "description": "数据源明确标记仿冒、盗版或非正版"
+        },
+        "official_asset_reference": {
+          "fields": ["official_icon", "official_pkg", "official_app_name", "official_version", "official_md5"],
+          "description": "存在可用于比对的正版资产"
+        },
+        "impersonation_category": {
+          "fields": ["impersonation_level1", "impersonation_level2", "impersonation_level3"],
+          "description": "命中仿冒分类标签"
+        },
+        "name_obfuscation": {
+          "fields": ["app_name"],
+          "description": "应用名含不可见字符、数字尾缀或其他名称混淆特征"
+        }
+      }
+    },
+    "business_label": {
+      "required_field_groups": [
+        ["fraud_flag", "fraud_category_big", "fraud_category_small", "fraud_family"],
+        ["harm_type", "virus_name", "virus_description"],
+        ["app_name", "anti_fraud_tag"]
+      ],
+      "evidence_types": {
+        "fraud_category": {
+          "fields": ["fraud_flag", "fraud_category_big", "fraud_category_small", "fraud_family"],
+          "description": "涉诈大类、小类或家族标签"
+        },
+        "harm_category": {
+          "fields": ["harm_type", "virus_name", "virus_description"],
+          "description": "危害类型或病毒语义对应业务风险"
+        },
+        "anti_fraud_label": {
+          "fields": ["anti_fraud_tag"],
+          "description": "反诈标签命中"
+        },
+        "app_name_semantics": {
+          "fields": ["app_name"],
+          "description": "应用名称体现贷款、博彩、色情、刷单、投资等业务语义"
+        }
+      }
+    }
+  }
+}

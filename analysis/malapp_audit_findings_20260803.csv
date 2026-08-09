@@ -1,0 +1,17 @@
+﻿priority,area,finding,evidence,action
+P0,评测有效性,发布集存在标签代理字段和类别/证据密度偏差,"782条含诈骗类别字段；1,400扩展中的700条恶意样本全部含代理字段；95冻结金标仅3条良性",从模型输入移除业务结论/病毒结论字段，重建证据等价盲测集；双专家复核后重新冻结
+P0,访问控制,管理与训练反馈接口基本无鉴权,56个唯一API路径，仅5处RAG接口调用可选服务密钥；模型设置、人工复核、任务、导出可直接写,默认仅回环监听；统一认证、RBAC、CSRF/Origin校验、审计日志；管理面与推理面分离
+P0,密钥/SSRF,模型设置状态返回明文密钥，且可把带Bearer的探测请求发到任意URL,model_runtime_status返回**settings；POST设置后server_model_status请求api_url/models,API永不返回密钥值；凭据进系统密钥库；URL allowlist、阻断内网/重定向、出站代理
+P0,任务可靠性,旧套件RAG任务连续失败仍运行，且与最新套件错配,运行进程来自strict400旧版；任务绑定v1，检查时失败样本持续增加,启动前端点冒烟；3次连续同因失败全局熔断；任务固定代码/套件指纹；显式迁移或取消旧任务
+P1,训练数据治理,人工复核和RAG标注可被伪造并进入SFT/DPO,reviewer/second_reviewer/status为客户端自由字段；reviewed/adjudicated直接参与导出,服务端身份、角色和双人分离校验；金标不可变版本；导出签名与审批
+P1,资源消耗,请求体、Excel/APK base64与ZIP成员无大小/压缩比限制,read_body信任Content-Length；APK整文件和DEX成员一次性读入内存,网关与应用双重限额、流式哈希/解析、ZIP条目数/解压大小/压缩比限制、速率限制
+P1,文件系统,字符串前缀路径校验和任意导出目录,serve_static/resolve_user_path使用startswith；datasets/export接受任意resolve路径,Path.relative_to/is_relative_to；导出固定到受控目录并拒绝覆盖
+P1,发布治理,发布包包含训练库、SFT数据和严格集答案,发布包约3.89GB；training_artifacts约1.13GB；含strict_untrained_release CSV及gold_label,生产包白名单；评测输入与答案分离；答案仅评测服务持有；生成SBOM和哈希清单
+P1,部署,Docker发布到全部网卡且使用基础http.server；镜像未安装声明依赖,compose端口未指定127.0.0.1；Dockerfile无pip install,反向代理TLS/认证或仅回环；生产WSGI；锁定并安装依赖；容器功能一致性测试
+P1,数据库,测试稳定出现未关闭SQLite连接，且未统一WAL/busy_timeout,50项测试通过但ResourceWarning: unclosed database；多处with sqlite3.connect,统一connection factory+closing；WAL、busy_timeout、短事务；并发锁与故障注入测试
+P1,缓存一致性,缓存指纹不含提示词、RAG快照、代码、阈值和Agent配置,缓存版本仍为2026-06-15，签名主要只有端点与模型名,使用完整inference fingerprint并展示命中来源；评测默认禁用生产缓存
+P1,质量门禁,"1,400扩展待双专家复核，RAG专家复核为0，Agent消融/恢复尚未完成",manifest与baseline明确标记requires review/ablation,在正式模型比较前先完成金标、RAG relevance gold、五变体与断点恢复
+P2,工程质量,缺少CI、覆盖率门禁、静态类型/安全/依赖审计,8个测试文件50项测试；无.github/workflows和锁文件,CI加入unit/integration/security、coverage、ruff/mypy/bandit/pip-audit、构建复现和SBOM
+P2,移动恶意分析,当前APK分析以轻量静态解析为主，缺少行为沙箱和家族/证书谱系,静态代码只读Manifest/DEX/证书/SDK；无设备运行状态验证,接入隔离MobSF/Android沙箱、PCAP/API/文件行为、证书与包名谱系、ATT&CK Mobile映射
+P2,RAG安全与评测,缺少检索语料投毒/提示注入/时间衰减专项门禁,当前0条专家证据复核；主要报告非空检索率,检索与生成分评；gold doc_id；文档信任等级、时间戳、引用跨度；恶意指令红队集
+P2,可观测性/速度,缺少统一模型/Agent span、token/成本和队列等待分解,约90秒/样本，当前只能看总延迟,按预处理/检索/甲乙推理/辩论/落库分段追踪；限流并行、分片断点、吞吐预测

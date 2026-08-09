@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "malapp-analysis": {
+      "command": "C:\\Users\\啤酒肚\\Desktop\\工作\\test1\\.venv\\Scripts\\python.exe",
+      "args": [
+        "C:\\Users\\啤酒肚\\Desktop\\工作\\test1\\hermes\\mcp_server.py"
+      ],
+      "env": {
+        "PYTHONPATH": "C:\\Users\\啤酒肚\\Desktop\\工作\\test1",
+        "PYTHONUTF8": "1"
+      }
+    }
+  }
+}

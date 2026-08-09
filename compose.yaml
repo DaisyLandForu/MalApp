@@ -1,0 +1,54 @@
+name: malapp-judgement
+
+services:
+  malapp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: malapp-judgement:local
+    container_name: malapp-judgement
+    restart: unless-stopped
+    ports:
+      - "${MALAPP_PUBLISHED_PORT:-8765}:8765"
+    environment:
+      MALAPP_HOST: "0.0.0.0"
+      MALAPP_PORT: "8765"
+      MALAPP_DATA_DIR: "/var/lib/malapp"
+      MALAPP_WORKSPACE_ROOT: "/workspace"
+      MALAPP_USE_LOCAL_QWEN: "${MALAPP_USE_LOCAL_QWEN:-0}"
+      MALAPP_QWEN_MODEL: "${MALAPP_QWEN_MODEL:-Qwen/Qwen2.5-0.5B-Instruct}"
+      MALAPP_DEBATE_ROUNDS: "${MALAPP_DEBATE_ROUNDS:-2}"
+      MALAPP_MODEL_A_API_URL: "${MALAPP_MODEL_A_API_URL:-}"
+      MALAPP_MODEL_A_API_KEY: "${MALAPP_MODEL_A_API_KEY:-}"
+      MALAPP_MODEL_A_MODEL: "${MALAPP_MODEL_A_MODEL:-}"
+      MALAPP_MODEL_B_API_URL: "${MALAPP_MODEL_B_API_URL:-}"
+      MALAPP_MODEL_B_API_KEY: "${MALAPP_MODEL_B_API_KEY:-}"
+      MALAPP_MODEL_B_MODEL: "${MALAPP_MODEL_B_MODEL:-}"
+    volumes:
+      - malapp-data:/var/lib/malapp
+      - ./docker/workspace:/workspace:ro
+    read_only: true
+    tmpfs:
+      - /tmp:size=512m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import json,urllib.request;
+          r=urllib.request.urlopen('http://127.0.0.1:8765/api/health',timeout=3);
+          d=json.load(r);
+          raise SystemExit(0 if d.get('status')=='ok' else 1)
+      interval: 15s
+      timeout: 5s
+      start_period: 10s
+      retries: 4
+
+volumes:
+  malapp-data:
+    name: malapp-judgement-data

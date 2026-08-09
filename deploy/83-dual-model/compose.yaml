@@ -1,0 +1,72 @@
+name: malapp-dual-model-83
+
+services:
+  model-a:
+    image: ${VLLM_IMAGE}
+    container_name: malapp-model-a
+    restart: unless-stopped
+    ipc: host
+    environment:
+      CUDA_VISIBLE_DEVICES: "0"
+      NVIDIA_VISIBLE_DEVICES: "0"
+      HF_TOKEN: ${HF_TOKEN}
+      HF_HOME: /root/.cache/huggingface
+    command:
+      - --model
+      - ${MODEL_A_ID}
+      - --served-model-name
+      - ${MODEL_A_NAME}
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --quantization
+      - awq
+      - --gpu-memory-utilization
+      - ${MODEL_A_GPU_MEMORY_UTILIZATION}
+      - --max-model-len
+      - ${MODEL_A_MAX_MODEL_LEN}
+      - --max-num-seqs
+      - ${MAX_NUM_SEQS}
+      - --enforce-eager
+    ports:
+      - "${MODEL_A_PORT}:8000"
+    volumes:
+      - ${HF_HOME}:/root/.cache/huggingface
+      - ${MODEL_DIR}:/models
+    gpus: all
+
+  model-b:
+    image: ${VLLM_IMAGE}
+    container_name: malapp-model-b
+    restart: unless-stopped
+    ipc: host
+    environment:
+      CUDA_VISIBLE_DEVICES: "0"
+      NVIDIA_VISIBLE_DEVICES: "0"
+      HF_TOKEN: ${HF_TOKEN}
+      HF_HOME: /root/.cache/huggingface
+    command:
+      - --model
+      - ${MODEL_B_ID}
+      - --served-model-name
+      - ${MODEL_B_NAME}
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --quantization
+      - awq
+      - --gpu-memory-utilization
+      - ${MODEL_B_GPU_MEMORY_UTILIZATION}
+      - --max-model-len
+      - ${MODEL_B_MAX_MODEL_LEN}
+      - --max-num-seqs
+      - ${MAX_NUM_SEQS}
+      - --enforce-eager
+    ports:
+      - "${MODEL_B_PORT}:8000"
+    volumes:
+      - ${HF_HOME}:/root/.cache/huggingface
+      - ${MODEL_DIR}:/models
+    gpus: all

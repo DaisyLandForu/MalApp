@@ -181,6 +181,11 @@ def test_production_requires_distinct_debate_models() -> None:
         validate_model_pair(settings, profile="production")
 
 
+def test_production_requires_dual_model_configuration_at_startup() -> None:
+    with pytest.raises(ValueError, match="two configured"):
+        validate_model_pair({"server_models_enabled": False}, profile="production")
+
+
 def test_dev_same_model_simulation_is_marked() -> None:
     with patch.dict("os.environ", {"MALAPP_PROFILE": "demo", "MALAPP_DISABLE_LLM_RULE_FALLBACK": "0"}):
         report = run_debate(evidence_blocks(), {"verification_mode": True})

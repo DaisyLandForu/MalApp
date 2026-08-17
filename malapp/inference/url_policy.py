@@ -59,6 +59,10 @@ def validate_model_endpoint(
 def validate_model_pair(settings: dict[str, object], *, profile: str | None = None) -> None:
     active_profile = (profile or os.getenv("MALAPP_PROFILE", "demo")).strip().lower()
     enabled = bool(settings.get("server_models_enabled"))
+    if active_profile == "production" and not enabled:
+        raise ValueError(
+            "production requires two configured OpenAI-compatible debate models"
+        )
     for label in ("a", "b"):
         url = str(settings.get(f"model_{label}_api_url") or "")
         model = str(settings.get(f"model_{label}_model") or "").strip()

@@ -10,7 +10,13 @@ from typing import Any
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
+from malapp.governance.rag_snapshot import (
+    DEFAULT_CHUNK_STRATEGY,
+    capture_rag_snapshot,
+    invalidate_rag_snapshot,
+)
 from malapp.rag.embedding import (
+    DEFAULT_CHINESE_MODEL,
     cached_embed,
     cosine,
     embed_text,
@@ -90,6 +96,7 @@ def add_document(
             source_type=source_type,
         )
         conn.commit()
+    invalidate_rag_snapshot(path)
 
 
 def rebuild_graph_index(path: Path = RAG_DB_PATH) -> dict[str, Any]:
@@ -130,6 +137,8 @@ def rebuild_graph_index(path: Path = RAG_DB_PATH) -> dict[str, Any]:
             )
         conn.commit()
         status = graph_status(conn)
+    if processed:
+        invalidate_rag_snapshot(path)
     return {
         "processed_documents": processed,
         "documents_with_entities": indexed,
@@ -200,6 +209,8 @@ def rag_status(path: Path = RAG_DB_PATH) -> dict[str, Any]:
             "embedding_mismatched_documents": 0,
             "rebuild_required": False,
             "sources": {},
+            "snapshot_id": None,
+            "snapshot": None,
         }
     init_rag_db(path)
     with closing(sqlite3.connect(path)) as conn:
@@ -217,6 +228,12 @@ def rag_status(path: Path = RAG_DB_PATH) -> dict[str, Any]:
             )
         }
         graph = graph_status(conn)
+    snapshot = capture_rag_snapshot(
+        path,
+        embedding_model=DEFAULT_CHINESE_MODEL,
+        embedding_backend=backend,
+        embedding_dim=dim,
+    )
     return {
         "ready": total > 0 and mismatched < total,
         "database": str(path),
@@ -229,6 +246,8 @@ def rag_status(path: Path = RAG_DB_PATH) -> dict[str, Any]:
         "sources": sources,
         "graph": graph,
         "mode": "hybrid_kg_vector",
+        "snapshot_id": (snapshot or {}).get("snapshot_id"),
+        "snapshot": snapshot,
     }
 
 
@@ -291,12 +310,24 @@ def rag_context_for_sample(
     allow_remote: bool = True,
 ) -> dict[str, Any]:
     if str(os.getenv("MALAPP_RAG_ENABLED", "1")).lower() not in {"1", "true", "yes", "y"}:
-        return {"enabled": False, "ready": False, "query": "", "items": [], "status": rag_status()}
+        status = rag_status()
+        return {
+            "enabled": False,
+            "ready": False,
+            "query": "",
+            "items": [],
+            "status": status,
+            "rag_snapshot_id": status.get("snapshot_id"),
+        }
     query = build_query_from_sample(sample, evidence_blocks, raw_evidence)
     remote_url = str(os.getenv("MALAPP_RAG_REMOTE_BASE_URL", "")).strip().rstrip("/")
     if remote_url and allow_remote:
         remote = _remote_hybrid_context(remote_url, sample, evidence_blocks, raw_evidence, top_k)
         if remote is not None:
+            remote.setdefault(
+                "rag_snapshot_id",
+                (remote.get("status") or {}).get("snapshot_id"),
+            )
             return remote
     # Existing RAG databases are upgraded lazily, so users do not have to
     # manually rebuild their index after updating the desktop application.
@@ -304,6 +335,7 @@ def rag_context_for_sample(
     vector_items = search(query, top_k=max(top_k, 3))
     retrieval_mode = str(os.getenv("MALAPP_RAG_MODE", "hybrid") or "hybrid").strip().lower()
     if retrieval_mode in {"vector", "vector_only"}:
+        status = rag_status()
         return {
             "enabled": True,
             "ready": bool(vector_items),
@@ -312,10 +344,12 @@ def rag_context_for_sample(
             "vector_items": [compact_rag_item(item) for item in vector_items[:top_k]],
             "graph_paths": [],
             "retrieval_mode": "vector_only",
-            "status": rag_status(),
+            "status": status,
+            "rag_snapshot_id": status.get("snapshot_id"),
         }
     graph_paths = search_graph(sample, evidence_blocks, raw_evidence, top_k=top_k)
     items = hybrid_items(vector_items, graph_paths, top_k=top_k, path=RAG_DB_PATH)
+    status = rag_status()
     return {
         "enabled": True,
         "ready": bool(items or graph_paths),
@@ -324,7 +358,8 @@ def rag_context_for_sample(
         "vector_items": [compact_rag_item(item) for item in vector_items[:top_k]],
         "graph_paths": graph_paths,
         "retrieval_mode": "hybrid_kg_vector",
-        "status": rag_status(),
+        "status": status,
+        "rag_snapshot_id": status.get("snapshot_id"),
     }
 
 
@@ -392,13 +427,32 @@ def hybrid_search(query: str, *, top_k: int = DEFAULT_TOP_K, source_types: list[
     graph_paths: list[dict[str, Any]] = []
     # Query text is deliberately not converted into graph facts. Exact graph
     # search is driven by explicit structured entities from a sample payload.
+    status = rag_status()
     return {
         "items": hybrid_items(vector_items, graph_paths, top_k=top_k),
         "vector_items": vector_items[:top_k],
         "graph_paths": graph_paths,
         "retrieval_mode": "vector_text_query",
-        "status": rag_status(),
+        "status": status,
+        "rag_snapshot_id": status.get("snapshot_id"),
     }
+
+
+def finalize_rag_snapshot(
+    path: Path = RAG_DB_PATH,
+    *,
+    chunk_strategy: dict[str, Any] | None = None,
+    corpus_version: str = "",
+) -> dict[str, Any] | None:
+    return capture_rag_snapshot(
+        path,
+        embedding_model=DEFAULT_CHINESE_MODEL,
+        embedding_backend=embedding_backend_name(),
+        embedding_dim=embedding_dim(),
+        chunk_strategy=chunk_strategy or DEFAULT_CHUNK_STRATEGY,
+        corpus_version=corpus_version,
+        persist=True,
+    )
 
 
 def _remote_hybrid_context(

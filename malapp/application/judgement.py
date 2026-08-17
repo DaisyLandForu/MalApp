@@ -36,7 +36,7 @@ from malapp.rag import rag_context_for_sample
 ROOT = PROJECT_ROOT
 DATA_DIR = resolve_data_dir()
 DB_PATH = DATA_DIR / "mvp.db"
-REPORT_SCHEMA_VERSION = "agent-runtime-pipeline-v4.1-full-domain-runtime"
+REPORT_SCHEMA_VERSION = "agent-runtime-pipeline-v5-artifact-governance"
 
 VERDICT_LABELS = {
     "malicious": "恶意",
@@ -1376,7 +1376,11 @@ def execute_judgement(raw_sample: dict[str, Any], *, entrypoint: str = "internal
         )
         pipeline.complete(
             "RAG_RETRIEVAL",
-            {"enabled": bool(rag_context.get("enabled")), "result_count": len(rag_context.get("items", []))},
+            {
+                "enabled": bool(rag_context.get("enabled")),
+                "result_count": len(rag_context.get("items", [])),
+                "rag_snapshot_id": rag_context.get("rag_snapshot_id"),
+            },
         )
     except Exception as exc:
         rag_context = {"enabled": False, "ready": False, "query": "", "items": [], "error": str(exc)}
@@ -1473,6 +1477,7 @@ def execute_judgement(raw_sample: dict[str, Any], *, entrypoint: str = "internal
         "report_id": hashlib.sha1(json.dumps(normalized, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()[:16],
         "report_schema_version": REPORT_SCHEMA_VERSION,
         "created_at": utc_now(),
+        "rag_snapshot_id": rag_context.get("rag_snapshot_id"),
         "sample": normalized,
         "preprocess": {
             "unmapped_fields": unmapped,
@@ -1508,6 +1513,7 @@ def execute_judgement(raw_sample: dict[str, Any], *, entrypoint: str = "internal
             "service_pipeline": "malapp.agent-runtime.v2",
             "history_reused": False,
             "model_cache_signature": model_cache_signature(),
+            "rag_snapshot_id": rag_context.get("rag_snapshot_id"),
             "evaluation_config": evaluation_config,
             "evaluation_variant": os.getenv("MALAPP_EVAL_VARIANT", "production"),
             "pipeline": pipeline.snapshot(),

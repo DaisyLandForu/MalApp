@@ -10,12 +10,19 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from malapp.rag import rag_status, rebuild_graph_index  # noqa: E402
+from malapp.rag import finalize_rag_snapshot, rag_status, rebuild_graph_index  # noqa: E402
 
 
 def main() -> None:
     result = rebuild_graph_index()
-    print(json.dumps({"rebuild": result, "status": rag_status()}, ensure_ascii=False, indent=2))
+    snapshot = finalize_rag_snapshot()
+    print(
+        json.dumps(
+            {"rebuild": result, "status": rag_status(), "snapshot": snapshot},
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
 
 
 if __name__ == "__main__":

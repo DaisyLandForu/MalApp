@@ -18,7 +18,13 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from malapp.application.judgement import DB_PATH  # noqa: E402
-from malapp.rag import RAG_DB_PATH, add_document, init_rag_db, rag_status  # noqa: E402
+from malapp.rag import (  # noqa: E402
+    RAG_DB_PATH,
+    add_document,
+    finalize_rag_snapshot,
+    init_rag_db,
+    rag_status,
+)
 
 
 def doc_id(prefix: str, *parts: Any) -> str:
@@ -470,7 +476,24 @@ def main() -> None:
         counts["app_rag"] = ingest_app_rag(Path(args.app_rag_dir), limit)
     if not args.skip_genuine:
         counts["official_app_asset"] = ingest_genuine_sql(Path(args.genuine_sql), limit)
-    print(json.dumps({"counts": counts, "status": rag_status(), "database": str(RAG_DB_PATH)}, ensure_ascii=False, indent=2))
+    snapshot = finalize_rag_snapshot(
+        chunk_strategy={
+            "documents": {"size": 900, "overlap": 120},
+            "app_rag": {"size": 1100, "overlap": 160},
+        }
+    )
+    print(
+        json.dumps(
+            {
+                "counts": counts,
+                "status": rag_status(),
+                "snapshot": snapshot,
+                "database": str(RAG_DB_PATH),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
 
 
 if __name__ == "__main__":

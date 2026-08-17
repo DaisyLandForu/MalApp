@@ -197,7 +197,14 @@ def run_with_retries(
         except Exception as exc:
             events.append(runtime_event(agent.name, "attempt", "failed", f"attempt {attempt}: {exc}"))
             if attempt > policy.max_retries:
-                result = degraded_result(agent.name, str(exc), "exception", "failed", attempts=attempt)
+                timed_out = isinstance(exc, TimeoutError)
+                result = degraded_result(
+                    agent.name,
+                    str(exc),
+                    "timeout" if timed_out else "exception",
+                    "timeout" if timed_out else "failed",
+                    attempts=attempt,
+                )
                 return result, events
     raise AssertionError("unreachable agent retry state")
 

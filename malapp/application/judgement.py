@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any
 
 from malapp.agents.base import AgentResult, EvidenceBlock
-from malapp.agents.business_label import analyze_business_label
 from malapp.agents.domain import (
     BusinessLabelAgent,
     ImpersonationAgent,
@@ -23,10 +22,8 @@ from malapp.agents.evidence_layers import (
     build_raw_evidence_layer,
     build_structured_evidence_layer,
 )
-from malapp.agents.impersonation import analyze_impersonation
 from malapp.agents.output import validate_and_repair_evidence_blocks
 from malapp.agents.static_features import analyze_apk_from_sample, public_static_feedback
-from malapp.agents.threat_intelligence import analyze_threat_intelligence
 from malapp.config.paths import DEFAULTS_DIR, PROJECT_ROOT, resolve_data_dir
 from malapp.inference.local_qwen import local_qwen_enabled
 from malapp.orchestration.debate import run_debate
@@ -39,7 +36,7 @@ from malapp.rag import rag_context_for_sample
 ROOT = PROJECT_ROOT
 DATA_DIR = resolve_data_dir()
 DB_PATH = DATA_DIR / "mvp.db"
-REPORT_SCHEMA_VERSION = "agent-runtime-pipeline-v4"
+REPORT_SCHEMA_VERSION = "agent-runtime-pipeline-v4.1-full-domain-runtime"
 
 VERDICT_LABELS = {
     "malicious": "恶意",
@@ -1329,13 +1326,16 @@ def execute_judgement(raw_sample: dict[str, Any], *, entrypoint: str = "internal
 
     pipeline.start("AGENT_EXECUTION")
     try:
-        threat_intelligence = analyze_threat_intelligence(normalized)
-        normalized["threat_intelligence"] = threat_intelligence
-        impersonation_analysis = analyze_impersonation(normalized)
-        normalized["impersonation_analysis"] = impersonation_analysis
-        business_label_analysis = analyze_business_label(normalized)
-        normalized["business_label_analysis"] = business_label_analysis
         evidence_blocks, agent_runtime, agent_results = run_agents(normalized, iocs)
+        artifacts = {
+            key: value
+            for result in agent_results
+            for key, value in result.artifacts.items()
+        }
+        threat_intelligence = artifacts.get("threat_intelligence", {})
+        impersonation_analysis = artifacts.get("impersonation_analysis", {})
+        business_label_analysis = artifacts.get("business_label_analysis", {})
+        normalized.update(artifacts)
         evidence_blocks, agent_output_validation = validate_and_repair_evidence_blocks(evidence_blocks)
         evidence_blocks = add_structured_evidence(evidence_blocks, normalized)
         degradation_policy = evaluate_degradation(agent_results)
@@ -1344,6 +1344,7 @@ def execute_judgement(raw_sample: dict[str, Any], *, entrypoint: str = "internal
             "agent_statuses": {
                 name: state["status"] for name, state in agent_runtime["agents"].items()
             },
+            "artifact_keys": sorted(artifacts),
         }
         degradation_codes = [item["code"] for item in degradation_policy["reasons"]]
         if degradation_codes:

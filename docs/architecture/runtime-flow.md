@@ -30,7 +30,7 @@ FastAPI / Batch / Hermes MCP
 
 - `apps/server`：FastAPI 协议转换、Bearer 鉴权、请求限额和分域路由；不承载业务研判逻辑。
 - `malapp/application`：提供唯一 `JudgementService`，组织单样本、批处理和 Dashboard 用例。
-- `malapp/agents`：遵循统一 `Agent` Protocol，只分析本领域并返回 `AgentResult`。
+- `malapp/agents`：遵循统一 `Agent` Protocol；领域分析与 Evidence 生成都在 `Agent.run()` 内完成并返回 `AgentResult`。
 - `malapp/orchestration`：统一管理注册、并发、重试、超时、失败分类、状态机、降级、辩论和决策。
 - `malapp/inference`：模型 Provider 与学习模型 Runtime。
 - `malapp/rag`：文本向量和知识图谱检索。

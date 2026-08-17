@@ -41,10 +41,12 @@ class AgentResult:
     error: str | None = None
     failure_type: str | None = None
     attempts: int = 1
+    artifacts: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
         payload["evidence"] = [asdict(block) for block in self.evidence]
+        payload["artifact_keys"] = sorted(payload.pop("artifacts"))
         return payload
 
 

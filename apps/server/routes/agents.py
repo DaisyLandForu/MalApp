@@ -6,7 +6,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, status
 
 from apps.server.auth import require_admin, require_authenticated
 from apps.server.limits import payload_object
-from integrations.hermes.runtime import hermes_status
+from integrations.hermes.adapter import hermes_status
 from malapp.agents.business_label import analyze_business_label
 from malapp.agents.impersonation import analyze_impersonation, load_asset_library, update_asset_library
 from malapp.agents.static_features import analyze_apk_from_sample, public_static_feedback

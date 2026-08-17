@@ -6,8 +6,10 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, sta
 
 from apps.server.auth import require_authenticated, server_config
 from apps.server.limits import bounded_int, payload_object
+from malapp.application.contracts import JudgementRequest
 from malapp.application.dashboard import dashboard_overview
-from malapp.application.judgement import judge, list_reports
+from malapp.application.judgement import list_reports
+from malapp.application.service import get_judgement_service
 from malapp.observability.rewards import get_reward, list_rewards
 from malapp.observability.trace import get_trace, list_human_reviews, list_traces, save_human_review
 
@@ -16,7 +18,8 @@ router = APIRouter(dependencies=[Depends(require_authenticated)])
 
 @router.post("/api/judgements", status_code=status.HTTP_201_CREATED)
 def create_judgement(payload: Any = Body(default_factory=dict)) -> dict[str, Any]:
-    return judge(payload_object(payload))
+    request = JudgementRequest.from_payload(payload_object(payload), source="web_api")
+    return get_judgement_service().judge(request)
 
 
 @router.get("/api/reports")

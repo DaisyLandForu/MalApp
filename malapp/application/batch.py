@@ -11,7 +11,8 @@ from contextlib import closing
 from datetime import datetime, timezone
 from typing import Any
 
-from malapp.application.judgement import judge
+from malapp.application.contracts import JudgementRequest
+from malapp.application.service import get_judgement_service
 from malapp.data_import import preprocess
 from malapp.data_import.preprocess import (
     batch_pending_md5s,
@@ -25,6 +26,12 @@ from malapp.inference.settings import ensure_runtime_ready_for_judgement
 JOBS: dict[str, dict[str, Any]] = {}
 JOBS_LOCK = threading.Lock()
 CONTROLS: dict[str, threading.Event] = {}
+
+
+def judge(sample: dict[str, Any]) -> dict[str, Any]:
+    """Batch transport adapter kept as a narrow test seam."""
+    request = JudgementRequest.from_payload(sample, source="batch")
+    return get_judgement_service().judge(request)
 
 
 def utc_now() -> str:

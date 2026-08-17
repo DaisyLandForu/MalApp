@@ -549,11 +549,13 @@ class PipelineTest(unittest.TestCase):
         self.assertTrue(runtime["scheduler"]["concurrent"])
         self.assertEqual(runtime["agents"]["static_analysis"]["status"], "timeout")
         self.assertEqual(runtime["agents"]["threat_intel"]["restart_count"], 1)
-        self.assertEqual(runtime["agents"]["threat_intel"]["status"], "healthy")
+        self.assertEqual(runtime["agents"]["threat_intel"]["status"], "completed")
         self.assertEqual(len(report["evidence_blocks"]), 4)
         static_block = next(block for block in report["evidence_blocks"] if block["agent"] == "static_analysis")
         self.assertEqual(static_block["score"], 0)
         self.assertIn("timeout", static_block["evidence"][0])
+        self.assertEqual(report["degradation"]["status"], "degraded")
+        self.assertTrue(report["decision"]["review_required"])
 
     def test_debate_state_machine_memory_metrics_and_model_config(self):
         report = judge(

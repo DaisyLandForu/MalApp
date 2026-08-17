@@ -104,8 +104,10 @@ def get_report(report_id: str) -> dict[str, Any] | None:
 
 def build_agent_trace(report: dict[str, Any]) -> dict[str, Any]:
     sample = report.get("sample") or {}
+    preprocess = report.get("preprocess") or {}
     debate = report.get("debate") or {}
     decision = report.get("decision") or {}
+    execution = report.get("execution") or {}
     evidence_layers = report.get("evidence_layers") or {}
     trace_id = f"trace-{uuid.uuid4().hex[:16]}"
     runtime_snapshot = {}
@@ -128,10 +130,13 @@ def build_agent_trace(report: dict[str, Any]) -> dict[str, Any]:
             "package_name": sample.get("package_name"),
         },
         "input_snapshot": {
-            "preprocess": report.get("preprocess"),
+            "preprocess": preprocess,
             "raw_evidence": evidence_layers.get("raw_evidence"),
             "rag_context": evidence_layers.get("rag_context"),
         },
+        "agent_runtime": preprocess.get("agent_runtime") or {},
+        "pipeline": execution.get("pipeline") or {},
+        "degradation": report.get("degradation") or {},
         "agent_outputs": report.get("evidence_blocks") or [],
         "llm_explanation": evidence_layers.get("llm_explanation"),
         "debate": {
@@ -145,7 +150,7 @@ def build_agent_trace(report: dict[str, Any]) -> dict[str, Any]:
             "timings": debate.get("timings") or debate.get("metrics"),
         },
         "decision": decision,
-        "execution": report.get("execution") or {},
+        "execution": execution,
         "evaluation_metadata": report.get("evaluation_metadata") or {},
         "runtime_snapshot": runtime_snapshot,
     }

@@ -20,7 +20,7 @@ class BatchJudgementTest(unittest.TestCase):
         report = {
             "report_id": "retry-success",
             "decision": {"verdict": "malicious", "risk_level": "high", "final_score": 0.91},
-            "execution": {"orchestrator": "hermes"},
+            "execution": {"orchestrator": "agent_runtime"},
         }
         with (
             patch.object(batch_judgement, "load_feature_context", return_value={"md5": "A" * 32}),
@@ -146,7 +146,7 @@ class BatchJudgementTest(unittest.TestCase):
                     "risk_level": "low",
                     "final_score": 0.2,
                 },
-                "execution": {"orchestrator": "hermes", "history_reused": False},
+                "execution": {"orchestrator": "agent_runtime", "history_reused": False},
             }
 
         with patch.object(batch_judgement, "judge", side_effect=controlled_judge):

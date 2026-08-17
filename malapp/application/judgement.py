@@ -5,13 +5,19 @@ import json
 import os
 import re
 import sqlite3
-import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from malapp.agents.base import AgentResult, EvidenceBlock
 from malapp.agents.business_label import analyze_business_label
+from malapp.agents.domain import (
+    BusinessLabelAgent,
+    ImpersonationAgent,
+    StaticAnalysisAgent,
+    ThreatIntelAgent,
+)
 from malapp.agents.evidence_layers import (
     build_llm_explanation_layer,
     build_raw_evidence_layer,
@@ -23,15 +29,17 @@ from malapp.agents.static_features import analyze_apk_from_sample, public_static
 from malapp.agents.threat_intelligence import analyze_threat_intelligence
 from malapp.config.paths import DEFAULTS_DIR, PROJECT_ROOT, resolve_data_dir
 from malapp.inference.local_qwen import local_qwen_enabled
-from malapp.orchestration.agent_runtime import AgentSpec, run_agent_cluster
 from malapp.orchestration.debate import run_debate
 from malapp.orchestration.decision import collaborative_decision
+from malapp.orchestration.degradation import apply_degradation_policy, evaluate_degradation
+from malapp.orchestration.pipeline import PipelineStateMachine
+from malapp.orchestration.runtime import AgentRegistry, AgentRuntime
 from malapp.rag import rag_context_for_sample
 
 ROOT = PROJECT_ROOT
 DATA_DIR = resolve_data_dir()
 DB_PATH = DATA_DIR / "mvp.db"
-REPORT_SCHEMA_VERSION = "four-agent-evidence-layers-v3-separate-prior-fusion"
+REPORT_SCHEMA_VERSION = "agent-runtime-pipeline-v4"
 
 VERDICT_LABELS = {
     "malicious": "恶意",
@@ -53,23 +61,6 @@ IOC_PATTERNS = {
     "md5": re.compile(r"\b[a-fA-F0-9]{32}\b"),
     "sha256": re.compile(r"\b[a-fA-F0-9]{64}\b"),
 }
-
-
-@dataclass
-class EvidenceBlock:
-    agent: str
-    claim: str
-    evidence: list[str]
-    confidence: float
-    missing_fields: list[str] = field(default_factory=list)
-    score: float = 0.0
-    evidence_items: list[dict[str, Any]] = field(default_factory=list)
-    # score/claim always describe the observable domain evidence.  Learned
-    # priors are kept separately so that an XGBoost prior cannot turn
-    # "insufficient evidence" into a decisive domain conclusion.
-    status: str = "ok"
-    rule_score: float | None = None
-    ml_prior: float | None = None
 
 
 def utc_now() -> str:
@@ -1132,59 +1123,30 @@ def clamp(value: float) -> float:
     return max(0.0, min(1.0, round(value, 4)))
 
 
-def run_agents(sample: dict[str, Any], iocs: list[dict[str, Any]]) -> tuple[list[EvidenceBlock], dict[str, Any]]:
-    # 四智能体本地执行入口：把同一个样本并行交给静态、情报、仿冒、业务四个领域智能体。
-    # 每个智能体返回 EvidenceBlock，后续会送入 XGBoost 融合和双模型辩论。
-    specs = [
-        AgentSpec(
-            name="static_analysis",
-            run=agent_callable("static_analysis", lambda: static_analysis_agent(sample), sample),
-            fallback=fallback_agent_block,
-        ),
-        AgentSpec(
-            name="threat_intel",
-            run=agent_callable("threat_intel", lambda: threat_intel_agent(sample, iocs), sample),
-            fallback=fallback_agent_block,
-        ),
-        AgentSpec(
-            name="impersonation",
-            run=agent_callable("impersonation", lambda: impersonation_agent(sample), sample),
-            fallback=fallback_agent_block,
-        ),
-        AgentSpec(
-            name="business_label",
-            run=agent_callable("business_label", lambda: business_label_agent(sample), sample),
-            fallback=fallback_agent_block,
-        ),
-    ]
-    return run_agent_cluster(specs, sample.get("agent_runtime_config") if isinstance(sample.get("agent_runtime_config"), dict) else {})
-
-
-def agent_callable(agent_name: str, func: Any, sample: dict[str, Any]) -> Any:
-    def wrapped() -> EvidenceBlock:
-        faults = sample.get("agent_runtime_faults") if isinstance(sample.get("agent_runtime_faults"), dict) else {}
-        fault = faults.get(agent_name) if isinstance(faults.get(agent_name), dict) else {}
-        sleep_ms = int(fault.get("sleep_ms", 0))
-        if sleep_ms > 0:
-            time.sleep(sleep_ms / 1000)
-        failures_left = int(fault.get("failures", 0))
-        if failures_left > 0:
-            fault["failures"] = failures_left - 1
-            raise RuntimeError(f"simulated {agent_name} failure")
-        return func()
-
-    return wrapped
-
-
-def fallback_agent_block(agent_name: str, reason: str) -> EvidenceBlock:
-    return EvidenceBlock(
-        agent=agent_name,
-        claim=f"{agent_name} 已降级。",
-        evidence=[reason],
-        confidence=0.0,
-        missing_fields=["agent_runtime"],
-        score=0.0,
+def run_agents(
+    sample: dict[str, Any],
+    iocs: list[dict[str, Any]],
+) -> tuple[list[EvidenceBlock], dict[str, Any], list[AgentResult]]:
+    registry = AgentRegistry(
+        [
+            StaticAnalysisAgent(static_analysis_agent),
+            ThreatIntelAgent(threat_intel_agent),
+            ImpersonationAgent(impersonation_agent),
+            BusinessLabelAgent(business_label_agent),
+        ]
     )
+    results, runtime_report = AgentRuntime(registry).execute(
+        sample,
+        iocs=iocs,
+        config=(
+            sample.get("agent_runtime_config")
+            if isinstance(sample.get("agent_runtime_config"), dict)
+            else {}
+        ),
+    )
+    blocks = [block for result in results for block in result.evidence]
+    runtime_report["results"] = [result.to_dict() for result in results]
+    return blocks, runtime_report, results
 
 
 def debate(evidence_blocks: list[EvidenceBlock], config: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1250,9 +1212,8 @@ def mark_history_reused(report: dict[str, Any], source: str) -> dict[str, Any]:
     return reused
 
 
-def judge(raw_sample: dict[str, Any]) -> dict[str, Any]:
-    # 单样本研判主流水线：Excel/API 导入的样本最终都会走到这里。
-    # 顺序是：特征补齐 -> 四类预处理 -> 四智能体 -> XGBoost -> 双模型辩论 -> 终审报告。
+def execute_judgement(raw_sample: dict[str, Any], *, entrypoint: str = "internal") -> dict[str, Any]:
+    """Run the one authoritative judgement pipeline for every transport."""
     from malapp.data_import.preprocess import (
         build_feature_packages,
         get_cached_report,
@@ -1261,112 +1222,138 @@ def judge(raw_sample: dict[str, Any]) -> dict[str, Any]:
         set_cached_report,
     )
 
-    raw_sample = dict(raw_sample)
-    evaluation_config = (
-        dict(raw_sample.pop("evaluation_config"))
-        if isinstance(raw_sample.get("evaluation_config"), dict)
-        else {}
-    )
-    apk_analysis: dict[str, Any] = {}
-    apk_extracted, full_apk_analysis = analyze_apk_from_sample(raw_sample)
-    if full_apk_analysis:
-        apk_analysis = public_static_feedback(full_apk_analysis)
-        apk_extracted["apk_analysis"] = apk_analysis
-        apk_extracted.update(
-            {
-                key: value
-                for key, value in raw_sample.items()
-                if key not in {"apk_base64", "apk_path", "apk_file"} and value not in ("", None) and value != []
-            }
-        )
-        raw_sample = apk_extracted
-
-    md5 = str(raw_sample.get("md5") or raw_sample.get("sample_id") or "").upper().strip()
-    if md5:
-        feature_context = load_feature_context(md5)
-        feature_context.update({key: value for key, value in raw_sample.items() if value not in ("", None) and value != []})
-        raw_sample = feature_context
-    evaluation_fields = {
-        "gold_label",
-        "human_label",
-        "label_source",
-        "sample_weight",
-        "xgb_probability",
-        "xgb_verdict",
-    }
-    evaluation_metadata = {
-        key: raw_sample.get(key)
-        for key in evaluation_fields
-        if raw_sample.get(key) not in ("", None)
-    }
+    pipeline = PipelineStateMachine()
+    pipeline.start("NORMALIZE")
     try:
-        from malapp.inference.xgboost import enrich_sample as enrich_xgb_sample
+        raw_sample = dict(raw_sample)
+        evaluation_config = (
+            dict(raw_sample.pop("evaluation_config"))
+            if isinstance(raw_sample.get("evaluation_config"), dict)
+            else {}
+        )
+        md5 = str(raw_sample.get("md5") or raw_sample.get("sample_id") or "").upper().strip()
+        if md5:
+            feature_context = load_feature_context(md5)
+            feature_context.update(
+                {key: value for key, value in raw_sample.items() if value not in ("", None) and value != []}
+            )
+            raw_sample = feature_context
+        evaluation_fields = {
+            "gold_label",
+            "human_label",
+            "label_source",
+            "sample_weight",
+            "xgb_probability",
+            "xgb_verdict",
+        }
+        evaluation_metadata = {
+            key: raw_sample.get(key)
+            for key in evaluation_fields
+            if raw_sample.get(key) not in ("", None)
+        }
+        try:
+            from malapp.inference.xgboost import enrich_sample as enrich_xgb_sample
 
-        raw_sample = enrich_xgb_sample(raw_sample)
-    except Exception:
-        pass
-    for key in evaluation_fields:
-        raw_sample.pop(key, None)
-    # Internal storage paths can contain credentials and must never enter prompts or reports.
-    raw_sample.pop("filepath", None)
-    cache_sample = dict(raw_sample)
+            raw_sample = enrich_xgb_sample(raw_sample)
+        except Exception:
+            pass
+        for key in evaluation_fields:
+            raw_sample.pop(key, None)
+        raw_sample.pop("filepath", None)
+        normalized, unmapped = normalize_sample(raw_sample)
+        pipeline.complete("NORMALIZE", {"sample_id": normalized["sample_id"]})
+    except Exception as exc:
+        pipeline.fail("NORMALIZE", exc)
+        raise
+
+    pipeline.start("STATIC_EXTRACTION")
+    try:
+        apk_analysis: dict[str, Any] = {}
+        apk_extracted, full_apk_analysis = analyze_apk_from_sample(normalized)
+        if full_apk_analysis:
+            apk_analysis = public_static_feedback(full_apk_analysis)
+            apk_extracted["apk_analysis"] = apk_analysis
+            apk_extracted.update(
+                {
+                    key: value
+                    for key, value in normalized.items()
+                    if key not in {"apk_base64", "apk_path", "apk_file"}
+                    and value not in ("", None)
+                    and value != []
+                }
+            )
+            normalized, extracted_unmapped = normalize_sample(apk_extracted)
+            unmapped = sorted(set(unmapped + extracted_unmapped))
+        iocs = extract_iocs(normalized)
+        static_package, network_package = build_feature_packages(normalized)
+        pipeline.complete(
+            "STATIC_EXTRACTION",
+            {"apk_analyzed": bool(full_apk_analysis), "ioc_count": len(iocs)},
+        )
+    except Exception as exc:
+        pipeline.fail("STATIC_EXTRACTION", exc)
+        raise
+
+    cache_sample = dict(normalized)
     cached = get_cached_report(cache_sample)
-    has_valid_md5_for_xgb = valid_md5(raw_sample.get("md5") or raw_sample.get("sample_id"))
-    xgb_cache_required = (
-        has_valid_md5_for_xgb
-        and str(os.getenv("MALAPP_USE_XGB", "1")).lower() in {"1", "true", "yes", "y"}
-    )
+    has_valid_md5_for_xgb = valid_md5(normalized.get("md5") or normalized.get("sample_id"))
+    xgb_cache_required = has_valid_md5_for_xgb and str(os.getenv("MALAPP_USE_XGB", "1")).lower() in {
+        "1",
+        "true",
+        "yes",
+        "y",
+    }
+    cached_source = ""
     if cached_report_usable(
         cached,
         require_learned_agent_scores=xgb_cache_required,
         has_valid_md5_for_xgb=has_valid_md5_for_xgb,
     ):
-        return mark_history_reused(cached, "strict_sample_cache")
-    loose_md5_cache_enabled = str(os.getenv("MALAPP_MD5_REPORT_CACHE", "1")).lower() in {"1", "true", "yes", "y"}
-    if loose_md5_cache_enabled and has_valid_md5_for_xgb:
-        latest_for_md5 = get_latest_cached_report_by_md5(raw_sample.get("md5") or raw_sample.get("sample_id"))
+        cached_source = "strict_sample_cache"
+    elif str(os.getenv("MALAPP_MD5_REPORT_CACHE", "1")).lower() in {"1", "true", "yes", "y"} and has_valid_md5_for_xgb:
+        cached = get_latest_cached_report_by_md5(normalized.get("md5") or normalized.get("sample_id"))
         if cached_report_usable(
-            latest_for_md5,
+            cached,
             require_learned_agent_scores=xgb_cache_required,
             has_valid_md5_for_xgb=has_valid_md5_for_xgb,
             require_model_signature=True,
         ):
-            return mark_history_reused(latest_for_md5, "md5_report_cache")
+            cached_source = "md5_report_cache"
+    if cached_source and cached:
+        for stage in ("AGENT_EXECUTION", "RAG_RETRIEVAL", "XGB_INFERENCE", "DEBATE", "FINAL_DECISION", "PERSIST"):
+            pipeline.skip(stage, "history_cache_hit")
+        reused = mark_history_reused(cached, cached_source)
+        reused.setdefault("execution", {})["entrypoint"] = entrypoint
+        reused["execution"]["cache_lookup_pipeline"] = pipeline.snapshot()
+        return reused
 
-    threat_intelligence = analyze_threat_intelligence(raw_sample)
-    raw_sample["threat_intelligence"] = threat_intelligence
-    impersonation_analysis = analyze_impersonation(raw_sample)
-    raw_sample["impersonation_analysis"] = impersonation_analysis
-    business_label_analysis = analyze_business_label(raw_sample)
-    raw_sample["business_label_analysis"] = business_label_analysis
-    normalized, unmapped = normalize_sample(raw_sample)
-    iocs = extract_iocs(normalized)
-    static_package, network_package = build_feature_packages(normalized)
-    explicit_native_runtime = bool(
-        normalized.get("agent_runtime_config") or normalized.get("agent_runtime_faults")
-    )
-    use_hermes = (
-        str(os.getenv("MALAPP_USE_HERMES", "1")).lower() in {"1", "true", "yes", "y"}
-        and not explicit_native_runtime
-    )
-    if use_hermes:
-        from integrations.hermes.runtime import run_hermes_supervisor
-
-        evidence_blocks, agent_runtime = run_hermes_supervisor(normalized)
-    else:
-        evidence_blocks, agent_runtime = run_agents(normalized, iocs)
-    evidence_blocks, agent_output_validation = validate_and_repair_evidence_blocks(evidence_blocks)
-    evidence_blocks = add_structured_evidence(evidence_blocks, normalized)
-    xgb_result = None
+    pipeline.start("AGENT_EXECUTION")
     try:
-        from malapp.inference.xgboost import predict as predict_xgb
+        threat_intelligence = analyze_threat_intelligence(normalized)
+        normalized["threat_intelligence"] = threat_intelligence
+        impersonation_analysis = analyze_impersonation(normalized)
+        normalized["impersonation_analysis"] = impersonation_analysis
+        business_label_analysis = analyze_business_label(normalized)
+        normalized["business_label_analysis"] = business_label_analysis
+        evidence_blocks, agent_runtime, agent_results = run_agents(normalized, iocs)
+        evidence_blocks, agent_output_validation = validate_and_repair_evidence_blocks(evidence_blocks)
+        evidence_blocks = add_structured_evidence(evidence_blocks, normalized)
+        degradation_policy = evaluate_degradation(agent_results)
+        agent_metadata = {
+            "runtime_status": agent_runtime["status"],
+            "agent_statuses": {
+                name: state["status"] for name, state in agent_runtime["agents"].items()
+            },
+        }
+        degradation_codes = [item["code"] for item in degradation_policy["reasons"]]
+        if degradation_codes:
+            pipeline.degrade("AGENT_EXECUTION", degradation_codes, agent_metadata)
+        else:
+            pipeline.complete("AGENT_EXECUTION", agent_metadata)
+    except Exception as exc:
+        pipeline.fail("AGENT_EXECUTION", exc)
+        raise
 
-        xgb_result = predict_xgb(normalized)
-    except Exception:
-        xgb_result = None
-    if valid_md5(normalized.get("md5")):
-        evidence_blocks = apply_xgb_agent_scores(evidence_blocks, xgb_result)
-    evidence_blocks = add_evidence_conflict_markers(evidence_blocks)
     raw_evidence_layer = build_raw_evidence_layer(
         normalized,
         iocs=iocs,
@@ -1377,13 +1364,40 @@ def judge(raw_sample: dict[str, Any]) -> dict[str, Any]:
         business_label_analysis=business_label_analysis,
         apk_analysis=apk_analysis,
     )
+
+    pipeline.start("RAG_RETRIEVAL")
+    try:
+        rag_context = rag_context_for_sample(
+            normalized,
+            evidence_blocks,
+            raw_evidence_layer,
+            top_k=int(os.getenv("MALAPP_RAG_TOP_K", "6") or "6"),
+        )
+        pipeline.complete(
+            "RAG_RETRIEVAL",
+            {"enabled": bool(rag_context.get("enabled")), "result_count": len(rag_context.get("items", []))},
+        )
+    except Exception as exc:
+        rag_context = {"enabled": False, "ready": False, "query": "", "items": [], "error": str(exc)}
+        pipeline.degrade("RAG_RETRIEVAL", ["rag_retrieval_failed"], {"error": str(exc)})
+
+    pipeline.start("XGB_INFERENCE")
+    xgb_result = None
+    try:
+        from malapp.inference.xgboost import predict as predict_xgb
+
+        xgb_result = predict_xgb(normalized)
+        if xgb_result is None:
+            pipeline.skip("XGB_INFERENCE", "xgboost_unavailable_or_disabled")
+        else:
+            pipeline.complete("XGB_INFERENCE", {"verdict": xgb_result.get("verdict")})
+    except Exception as exc:
+        pipeline.degrade("XGB_INFERENCE", ["xgboost_inference_failed"], {"error": str(exc)})
+    if valid_md5(normalized.get("md5")):
+        evidence_blocks = apply_xgb_agent_scores(evidence_blocks, xgb_result)
+    evidence_blocks = add_evidence_conflict_markers(evidence_blocks)
     structured_evidence_layer = build_structured_evidence_layer(evidence_blocks)
-    rag_context = rag_context_for_sample(
-        normalized,
-        evidence_blocks,
-        raw_evidence_layer,
-        top_k=int(os.getenv("MALAPP_RAG_TOP_K", "6") or "6"),
-    )
+
     debate_config = (
         dict(normalized.get("debate_model_config"))
         if isinstance(normalized.get("debate_model_config"), dict)
@@ -1417,16 +1431,43 @@ def judge(raw_sample: dict[str, Any]) -> dict[str, Any]:
         "short",
         "initial_only",
     }
-    debate_result = debate(debate_evidence, debate_config)
-    decision = collaborative_decision(
-        normalized,
-        debate_result,
-        evidence_blocks,
-        normalized.get("decision_params") if isinstance(normalized.get("decision_params"), dict) else None,
-        xgb_result=xgb_result,
-    )
+
+    pipeline.start("DEBATE")
+    try:
+        debate_result = debate(debate_evidence, debate_config)
+        pipeline.complete(
+            "DEBATE",
+            {"execution_mode": debate_result.get("execution_mode", "full_debate")},
+        )
+    except Exception as exc:
+        pipeline.fail("DEBATE", exc)
+        raise
+
+    pipeline.start("FINAL_DECISION")
+    try:
+        decision = collaborative_decision(
+            normalized,
+            debate_result,
+            evidence_blocks,
+            normalized.get("decision_params") if isinstance(normalized.get("decision_params"), dict) else None,
+            xgb_result=xgb_result,
+        )
+        decision = apply_degradation_policy(decision, degradation_policy)
+        if degradation_policy["status"] == "degraded":
+            pipeline.degrade(
+                "FINAL_DECISION",
+                [item["code"] for item in degradation_policy["reasons"]],
+                {"verdict": decision["verdict"], "review_required": decision["review_required"]},
+            )
+        else:
+            pipeline.complete("FINAL_DECISION", {"verdict": decision["verdict"]})
+    except Exception as exc:
+        pipeline.fail("FINAL_DECISION", exc)
+        raise
+
     from malapp.inference.settings import model_cache_signature
 
+    pipeline.start("PERSIST")
     report = {
         "report_id": hashlib.sha1(json.dumps(normalized, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()[:16],
         "report_schema_version": REPORT_SCHEMA_VERSION,
@@ -1454,20 +1495,31 @@ def judge(raw_sample: dict[str, Any]) -> dict[str, Any]:
         },
         "debate": debate_result,
         "decision": decision,
+        "degradation": degradation_policy,
         "next_steps": [
             "将当前规则占位智能体替换为真实 APK 解析、IOC 情报、品牌相似度和业务标签工具。",
             "将模型甲/模型乙适配到本地 vLLM、Ollama 或 OpenAI-compatible 模型接口。",
             "补充已标注样本，用于校准 WEC 阈值和动态权重。",
         ],
         "execution": {
-            "orchestrator": "hermes" if use_hermes else "native",
+            "orchestrator": "agent_runtime",
+            "entrypoint": entrypoint,
+            "service_pipeline": "malapp.agent-runtime.v2",
             "history_reused": False,
             "model_cache_signature": model_cache_signature(),
             "evaluation_config": evaluation_config,
             "evaluation_variant": os.getenv("MALAPP_EVAL_VARIANT", "production"),
+            "pipeline": pipeline.snapshot(),
         },
         "evaluation_metadata": evaluation_metadata,
     }
+    try:
+        insert_report(report)
+        pipeline.complete("PERSIST", {"report_id": report["report_id"]})
+        report["execution"]["pipeline"] = pipeline.snapshot()
+    except Exception as exc:
+        pipeline.fail("PERSIST", exc)
+        raise
     try:
         from malapp.observability.trace import save_agent_trace
 
@@ -1485,3 +1537,12 @@ def judge(raw_sample: dict[str, Any]) -> dict[str, Any]:
     insert_report(report)
     set_cached_report(cache_sample, report)
     return report
+
+
+def judge(raw_sample: dict[str, Any]) -> dict[str, Any]:
+    """Convenience wrapper that still enters the authoritative service."""
+    from malapp.application.contracts import JudgementRequest
+    from malapp.application.service import get_judgement_service
+
+    request = JudgementRequest.from_payload(raw_sample, source="internal")
+    return get_judgement_service().judge(request)

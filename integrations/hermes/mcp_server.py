@@ -38,7 +38,7 @@ def dispatch(request: dict[str, Any]) -> dict[str, Any]:
                 "capabilities": {"tools": {"listChanged": False}},
                 "serverInfo": {
                     "name": "malapp-hermes-tools",
-                    "version": "1.0.0",
+                    "version": "2.0.0",
                 },
             }
         elif method == "ping":

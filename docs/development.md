@@ -33,8 +33,12 @@ python -m pytest
 | 分域 HTTP 路由 | `apps/server/routes/` |
 | 服务启动入口 | `apps/server/main.py` |
 | 单样本研判 | `malapp/application/judgement.py` |
+| 统一研判服务 | `malapp/application/service.py` |
 | 批量研判 | `malapp/application/batch.py` |
-| 四 Agent 调度 | `malapp/orchestration/agent_runtime.py` |
+| Agent Protocol | `malapp/agents/base.py` |
+| 四 Agent Runtime | `malapp/orchestration/runtime.py` |
+| Pipeline 状态机 | `malapp/orchestration/pipeline.py` |
+| 降级策略 | `malapp/orchestration/degradation.py` |
 | 双模型辩论 | `malapp/orchestration/debate.py` |
 | 最终决策 | `malapp/orchestration/decision.py` |
 | 模型配置 | `malapp/inference/settings.py` |
@@ -55,7 +59,7 @@ APK 和图标路径只能位于 `MALAPP_WORKSPACE_ROOT`；本地默认值是仓�
 2. 使用 Admin Bearer Token 调用 `/api/model/settings` 检查 Provider 状态；该接口不会回显 API key。
 3. `/api/rag/status` 和 `/api/xgb/status` 检查可选组件。
 4. 用 `config/defaults/sample_conflict.json` 验证完整研判链。
-5. 通过报告中的 `preprocess.agent_runtime`、`debate` 和 `decision.decision_trace` 定位阶段错误。
+5. 先查看 `execution.pipeline` 定位失败 Stage，再查看 `preprocess.agent_runtime` 的单 Agent Trace、`degradation`、`debate` 和 `decision.decision_trace`。
 
 不要在源码、测试或文档中写入真实 endpoint、Secret、作者机器路径或私有数据文件名。
 

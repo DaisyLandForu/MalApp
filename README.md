@@ -8,10 +8,10 @@ MalApp 是一个面向恶意 Android 应用研判的证据驱动多 Agent 项目
 Web / JSON API / Hermes MCP
              │
              ▼
-      Judgement Application
+       JudgementService
              │
              ▼
-      Agent Orchestrator
+        Agent Runtime
        ┌─────┼─────┬──────────┐
        ▼     ▼     ▼          ▼
     Static  Intel  Impersonation  Business
@@ -37,7 +37,7 @@ malapp/               在线研判核心包
   rag/                向量检索与知识图谱
   storage/            持久化适配器
   evaluation/         在线评测与人工复核流程
-integrations/hermes/  Hermes MCP 与 Orchestrator Adapter
+integrations/hermes/  Hermes MCP 到 JudgementService 的薄适配器
 training/             离线数据集、XGBoost 和 SFT 训练
 scripts/              数据、RAG、训练和评测命令
 malapp/config/defaults/ 可提交、无敏感信息的最小运行资源

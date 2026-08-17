@@ -1,1 +1,1 @@
-"""Hermes MCP and orchestrator adapter."""
+"""Hermes MCP transport adapter for the authoritative JudgementService."""

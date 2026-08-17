@@ -20,6 +20,7 @@ os.environ.setdefault("MPLCONFIGDIR", str(OUTPUT / ".matplotlib"))
 import numpy as np  # noqa: E402
 import xgboost as xgb  # noqa: E402
 
+from malapp.governance.artifacts import build_xgboost_manifest  # noqa: E402
 from training import pipeline as base  # noqa: E402
 
 DB_PATH = OUTPUT / "xgb_training.db"
@@ -510,7 +511,9 @@ def train() -> dict[str, Any]:
         report["thresholds"] = thresholds
         report["test"] = evaluate_split(wec_rows, wec, wec_features, "test", thresholds)
         export_test_set(conn, wec_rows, wec, wec_features, thresholds)
-        write_runtime_manifest(model_dir, thresholds)
+        conn.commit()
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        write_runtime_manifest(model_dir, thresholds, report)
     finally:
         conn.close()
     (OUTPUT / "training_report.json").write_text(
@@ -778,18 +781,27 @@ def save_curve(path: Path, history: dict[str, Any], title: str) -> None:
     plt.close()
 
 
-def write_runtime_manifest(model_dir: Path, thresholds: dict[str, Any]) -> None:
-    manifest = {
-        "version": "xgb-20260612",
-        "agents": {agent: FEATURES[agent] for agent in AGENTS},
-        "fusion_features": [f"{agent}_prob" for agent in AGENTS],
-        "wec_features": [
-            "engine_a_prob", "engine_b_prob", "engine_c_prob",
-            "engine_score_gap", "engine_disagreement",
+def write_runtime_manifest(
+    model_dir: Path,
+    thresholds: dict[str, Any],
+    metrics: dict[str, Any],
+) -> None:
+    manifest = build_xgboost_manifest(
+        model_dir=model_dir,
+        database_path=DB_PATH,
+        agents={agent: FEATURES[agent] for agent in AGENTS},
+        fusion_features=[f"{agent}_prob" for agent in AGENTS],
+        wec_features=[
+            "engine_a_prob",
+            "engine_b_prob",
+            "engine_c_prob",
+            "engine_score_gap",
+            "engine_disagreement",
         ],
-        "thresholds": thresholds,
-        "genuine_db": str(DB_PATH),
-    }
+        thresholds=thresholds,
+        metrics=metrics,
+        model_version="xgb-runtime-v1",
+    )
     (model_dir / "runtime_manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
     )

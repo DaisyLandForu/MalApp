@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from malapp.governance.artifacts import build_xgboost_manifest  # noqa: E402
 from training.xgboost import pipeline as xp  # noqa: E402
 
 DEFAULT_OUT = ROOT / "training_artifacts" / "xgb_selected_20260616"
@@ -313,15 +314,27 @@ def add_wec_features(rows: list[dict[str, Any]], fusion, fusion_features: list[s
     return result
 
 
-def write_manifest(out_dir: Path, thresholds: dict[str, Any]) -> None:
-    manifest = {
-        "version": "xgb-selected-20260616",
-        "agents": {agent: FEATURES[agent] for agent in AGENTS},
-        "fusion_features": [f"{agent}_prob" for agent in AGENTS],
-        "wec_features": ["engine_a_prob", "engine_b_prob", "engine_c_prob", "engine_score_gap", "engine_disagreement"],
-        "thresholds": thresholds,
-        "genuine_db": str(out_dir / "xgb_training.db"),
-    }
+def write_manifest(
+    out_dir: Path,
+    thresholds: dict[str, Any],
+    metrics: dict[str, Any],
+) -> None:
+    manifest = build_xgboost_manifest(
+        model_dir=out_dir / "models",
+        database_path=out_dir / "xgb_training.db",
+        agents={agent: FEATURES[agent] for agent in AGENTS},
+        fusion_features=[f"{agent}_prob" for agent in AGENTS],
+        wec_features=[
+            "engine_a_prob",
+            "engine_b_prob",
+            "engine_c_prob",
+            "engine_score_gap",
+            "engine_disagreement",
+        ],
+        thresholds=thresholds,
+        metrics=metrics,
+        model_version="xgb-selected-v1",
+    )
     (out_dir / "models" / "runtime_manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -402,7 +415,7 @@ def train(paths: dict[str, Path], out_dir: Path) -> dict[str, Any]:
     report["thresholds"] = thresholds
     report["test"] = xp.evaluate_split(wec_rows, wec, wec_features, "test", thresholds)
     (out_dir / "models" / "thresholds.json").write_text(json.dumps(thresholds, ensure_ascii=False, indent=2), encoding="utf-8")
-    write_manifest(out_dir, thresholds)
+    write_manifest(out_dir, thresholds, report)
     export_rows(out_dir, heldout, wec_rows, wec, wec_features, thresholds)
     report["duration_seconds_total"] = round(time.perf_counter() - total_start, 3)
     (out_dir / "training_report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")

@@ -64,6 +64,21 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def persist_observability_metrics(report: dict[str, Any]) -> None:
+    """Keep judgement delivery independent from metrics storage failures."""
+    try:
+        from malapp.observability.metrics import record_run_metrics
+
+        metric = record_run_metrics(report)
+        report.setdefault("execution", {})["metrics_record"] = {
+            "run_id": metric["run_id"],
+            "agent_count": metric["agent_count"],
+            "model_call_count": metric["model_call_count"],
+        }
+    except Exception as exc:
+        report.setdefault("execution", {})["metrics_error"] = str(exc)
+
+
 def build_xgb_fast_path_debate(xgb_result: dict[str, Any]) -> dict[str, Any]:
     score = float(xgb_result.get("probability", 0.5))
     verdict = str(xgb_result.get("verdict") or "suspicious")
@@ -1220,7 +1235,9 @@ def mark_history_reused(
     reused = copy.deepcopy(report)
     previous_run_id = reused.get("run_id") or reused.get("execution", {}).get("run_id")
     previous_pipeline = reused.get("execution", {}).get("pipeline")
+    previous_created_at = reused.get("created_at")
     reused["run_id"] = run_id
+    reused["created_at"] = utc_now()
     reused["cache_hit"] = True
     reused["cache_source"] = source
     reused.setdefault("execution", {})
@@ -1228,6 +1245,7 @@ def mark_history_reused(
     reused["execution"]["history_reused"] = True
     reused["execution"]["history_reuse_source"] = source
     reused["execution"]["cached_artifact_run_id"] = previous_run_id
+    reused["execution"]["cached_artifact_created_at"] = previous_created_at
     reused["execution"]["cached_artifact_pipeline"] = previous_pipeline
     reused["execution"]["pipeline"] = pipeline.snapshot()
     reused.setdefault("preprocess", {})["agent_runtime"] = {
@@ -1325,6 +1343,7 @@ def build_engine_c_skipped_report(
     }
     init_db()
     insert_report(report)
+    persist_observability_metrics(report)
     try:
         from malapp.observability.trace import save_agent_trace
 
@@ -1486,6 +1505,7 @@ def execute_judgement(raw_sample: dict[str, Any], *, entrypoint: str = "internal
             pipeline=pipeline,
         )
         reused.setdefault("execution", {})["entrypoint"] = entrypoint
+        persist_observability_metrics(reused)
         try:
             from malapp.observability.trace import save_agent_trace
 
@@ -1765,6 +1785,7 @@ def execute_judgement(raw_sample: dict[str, Any], *, entrypoint: str = "internal
     except Exception as exc:
         pipeline.fail("PERSIST", exc)
         raise
+    persist_observability_metrics(report)
     try:
         from malapp.observability.trace import save_agent_trace
 

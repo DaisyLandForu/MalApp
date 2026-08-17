@@ -63,6 +63,11 @@ def test_judgement_and_trace_bind_the_same_runtime_snapshot() -> None:
     assert report["preprocess"]["agent_runtime"]["run_id"] == report["run_id"]
     assert report["debate"]["run_id"] == report["run_id"]
     assert report["execution"]["pipeline"]["run_id"] == report["run_id"]
+    assert report["execution"]["metrics_record"] == {
+        "run_id": report["run_id"],
+        "agent_count": 4,
+        "model_call_count": len(report["debate"]["model_calls"]),
+    }
     assert report["debate"]["model_calls"]
     assert all(
         call["run_id"] == report["run_id"]

@@ -3695,8 +3695,11 @@ def build_model_call_trace(
             provider_name = "model_a" if index == 0 else "model_b"
             provider = providers[provider_name]
             request_count = max(0, int(turn.get("request_count") or 0))
+            backend = str(turn.get("backend") or "")
             status = "skipped" if turn.get("closing_skipped") else (
-                "fallback" if "fallback" in str(turn.get("backend") or "") else "completed"
+                "failed" if backend == "model_unavailable" else
+                "fallback" if backend == "rule" or "fallback" in backend else
+                "completed"
             )
             call_number = len(calls) + 1
             calls.append(

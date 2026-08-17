@@ -16,6 +16,7 @@ from malapp.data_import.preprocess import (
     init_preprocess_tables,
     save_feature_record,
 )
+from malapp.observability.metrics import observability_metrics
 
 STARTED_AT = time.monotonic()
 _CACHE_LOCK = Lock()
@@ -189,6 +190,7 @@ def dashboard_overview(cache_seconds: float = 5.0) -> dict[str, Any]:
             "token_usage": metrics.get("token_usage", {}),
             "latency_ms": metrics.get("latency_ms", {}),
         },
+        "observability": observability_metrics(limit=1000),
         "storage": {
             "database_bytes": DB_PATH.stat().st_size if DB_PATH.exists() else 0,
             "data_directory_bytes": _directory_size(DATA_DIR),

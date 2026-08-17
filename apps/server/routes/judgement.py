@@ -10,6 +10,7 @@ from malapp.application.contracts import JudgementRequest
 from malapp.application.dashboard import dashboard_overview
 from malapp.application.judgement import list_reports
 from malapp.application.service import get_judgement_service
+from malapp.observability.metrics import observability_metrics
 from malapp.observability.rewards import get_reward, list_rewards
 from malapp.observability.trace import get_trace, list_human_reviews, list_traces, save_human_review
 
@@ -48,6 +49,14 @@ def trace(report_id: str = "", trace_id: str = "", run_id: str = "") -> dict[str
     if not result:
         raise HTTPException(404, "trace not found")
     return result
+
+
+@router.get("/api/observability/metrics")
+def metrics(request: Request, limit: int = Query(100)) -> dict[str, Any]:
+    config = server_config(request)
+    return observability_metrics(
+        limit=bounded_int(limit, name="limit", default=100, maximum=config.max_query_limit)
+    )
 
 
 @router.get("/api/human-reviews")

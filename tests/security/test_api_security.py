@@ -97,6 +97,10 @@ class ApiSecurityTest(unittest.TestCase):
     def test_query_rag_and_batch_limits_are_centralized(self) -> None:
         with self.client() as client:
             reports = client.get("/api/reports?limit=11", headers=self.auth("user-key"))
+            metrics = client.get(
+                "/api/observability/metrics?limit=11",
+                headers=self.auth("user-key"),
+            )
             rag = client.post(
                 "/api/rag/search",
                 json={"query": "risk", "top_k": 6},
@@ -108,6 +112,7 @@ class ApiSecurityTest(unittest.TestCase):
                 headers=self.auth("admin-key"),
             )
         self.assertEqual(reports.status_code, 400)
+        self.assertEqual(metrics.status_code, 400)
         self.assertEqual(rag.status_code, 400)
         self.assertEqual(batch.status_code, 400)
 

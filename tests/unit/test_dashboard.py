@@ -17,6 +17,9 @@ class DashboardTest(unittest.TestCase):
             overview["counts"]["saved_reports"],
         )
         self.assertIn("storage", overview)
+        self.assertIn("observability", overview)
+        self.assertIn("latency_ms", overview["observability"]["runs"])
+        self.assertIn("human_override_rate", overview["observability"]["runs"])
         self.assertIsInstance(overview["agents"], list)
         self.assertEqual(4, len(overview["agents"]))
         self.assertTrue(all("name" in agent and "status" in agent for agent in overview["agents"]))

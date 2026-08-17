@@ -43,8 +43,8 @@ def traces(request: Request, limit: int = Query(100)) -> dict[str, Any]:
 
 
 @router.get("/api/agent-trace")
-def trace(report_id: str = "", trace_id: str = "") -> dict[str, Any]:
-    result = get_trace(report_id=report_id, trace_id=trace_id)
+def trace(report_id: str = "", trace_id: str = "", run_id: str = "") -> dict[str, Any]:
+    result = get_trace(report_id=report_id, trace_id=trace_id, run_id=run_id)
     if not result:
         raise HTTPException(404, "trace not found")
     return result

@@ -18,6 +18,7 @@ from malapp.agents.skill_context import build_debate_skill_context, compact_skil
 from malapp.governance.artifacts import canonical_json, sha256_text
 from malapp.inference.local_qwen import local_qwen_enabled, normalize_llm_result, parse_model_json, qwen_generate
 from malapp.inference.url_policy import validate_model_endpoint
+from malapp.observability.context import safe_digest
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = Path(os.getenv("MALAPP_DATA_DIR", str(ROOT / "data"))).expanduser().resolve()
@@ -67,7 +68,7 @@ def merge_generated_metrics(previous: dict[str, Any], newer: dict[str, Any]) -> 
             return 0
 
     merged = dict(newer)
-    for key in ("latency_ms", "prompt_tokens", "completion_tokens"):
+    for key in ("latency_ms", "prompt_tokens", "completion_tokens", "request_count"):
         merged[key] = metric(previous, key) + metric(newer, key)
     return merged
 
@@ -75,6 +76,7 @@ def run_debate(evidence_blocks: list[Any], config: dict[str, Any] | None = None)
     # 双模型辩论入口：接收四智能体 EvidenceBlock，让模型甲/模型乙完成初判、质疑、反驳和终审。
     # 这里负责压缩证据、并行调用模型、校验 JSON 输出，并把失败原因返回给上层流水线。
     config = config or {}
+    run_id = str(config.get("run_id") or "")
     configured_envelope = config.get("canonical_evidence_envelope")
     if isinstance(configured_envelope, dict) and configured_envelope.get("evidence_snapshot_id"):
         envelope = dict(configured_envelope)
@@ -347,7 +349,14 @@ def run_debate(evidence_blocks: list[Any], config: dict[str, Any] | None = None)
     arbiter = arbitrate(evidence, initial_a, initial_b, closing_a, closing_b, memory, config)
     transition("completed")
 
+    model_calls = build_model_call_trace(
+        stages,
+        providers,
+        run_id=run_id,
+        evidence_snapshot_id=envelope["evidence_snapshot_id"],
+    )
     return {
+        "run_id": run_id,
         "execution_mode": "llm_evidence_verification" if verification_mode else "full_debate",
         "state_machine": {
             "state": state,
@@ -392,6 +401,7 @@ def run_debate(evidence_blocks: list[Any], config: dict[str, Any] | None = None)
             "sha256": envelope["sha256"],
         },
         "prompt_version": debate_prompt_manifest(),
+        "model_calls": model_calls,
         "arbiter": arbiter,
         "xgb_prior": config.get("xgb_prior"),
     }
@@ -1263,6 +1273,7 @@ class ModelProvider:
         )
         if self.backend == "local_qwen":
             raw = qwen_generate(system_prompt, user_prompt, max_new_tokens=max_tokens, model_id=self.model)
+            usage = {"request_count": 1, "finish_reason": "completed"}
         elif self.backend == "openai_compatible":
             raw, usage = self._http_generate(system_prompt, user_prompt, max_tokens)
         else:
@@ -1273,6 +1284,8 @@ class ModelProvider:
             "latency_ms": int((time.perf_counter() - started) * 1000),
             "prompt_tokens": int(usage.get("prompt_tokens") or estimate_tokens(system_prompt + user_prompt)),
             "completion_tokens": int(usage.get("completion_tokens") or estimate_tokens(raw)),
+            "request_count": int(usage.get("request_count") or 1),
+            "finish_reason": str(usage.get("finish_reason") or "completed"),
         }
 
     def context_token_limit(self) -> int:
@@ -1290,6 +1303,7 @@ class ModelProvider:
         return int(os.getenv("MALAPP_MODEL_CONTEXT_TOKENS", "4096") or "4096")
 
     def _http_generate(self, system_prompt: str, user_prompt: str, max_tokens: int) -> tuple[str, dict[str, Any]]:
+        request_count = 0
         if self.context_token_limit() <= 4096 or self.name == "model_b":
             no_think_guard = (
                 "/no_think\n"
@@ -1361,11 +1375,16 @@ class ModelProvider:
             )
             for transport_try in range(transport_retries):
                 try:
+                    request_count += 1
                     with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
                         data = json.loads(response.read().decode("utf-8"))
-                    message = data["choices"][0].get("message", {})
+                    choice = data["choices"][0]
+                    message = choice.get("message", {})
                     content = message.get("content") or message.get("reasoning_content") or ""
-                    return strip_model_thinking_text(content), data.get("usage", {})
+                    usage = dict(data.get("usage", {}))
+                    usage["request_count"] = request_count
+                    usage["finish_reason"] = choice.get("finish_reason") or "completed"
+                    return strip_model_thinking_text(content), usage
                 except urllib.error.HTTPError as exc:
                     body = exc.read().decode("utf-8", "replace")
                     last_error = (
@@ -1423,11 +1442,16 @@ class ModelProvider:
                 )
             for transport_try in range(compact_transport_retries):
                 try:
+                    request_count += 1
                     with urllib.request.urlopen(short_request, timeout=timeout_seconds) as response:
                         data = json.loads(response.read().decode("utf-8"))
-                    message = data["choices"][0].get("message", {})
+                    choice = data["choices"][0]
+                    message = choice.get("message", {})
                     content = message.get("content") or message.get("reasoning_content") or ""
-                    return strip_model_thinking_text(content), data.get("usage", {})
+                    usage = dict(data.get("usage", {}))
+                    usage["request_count"] = request_count
+                    usage["finish_reason"] = choice.get("finish_reason") or "completed"
+                    return strip_model_thinking_text(content), usage
                 except (http.client.RemoteDisconnected, ConnectionResetError, TimeoutError) as exc:
                     errors.append(
                         f"{self.model}@{self.api_url} compact retry transport "
@@ -1947,6 +1971,8 @@ def invoke(
             result["latency_ms"] = generated["latency_ms"]
             result["prompt_tokens"] = generated["prompt_tokens"]
             result["completion_tokens"] = generated["completion_tokens"]
+            result["request_count"] = generated.get("request_count", 1)
+            result["finish_reason"] = generated.get("finish_reason", "invalid_schema_fallback")
             return result
         if placeholder_model_output(parsed, generated["raw_text"], fallback, phase):
             dump_llm_validation_failure(provider, phase, generated, parsed)
@@ -1961,6 +1987,8 @@ def invoke(
             result["latency_ms"] = generated["latency_ms"]
             result["prompt_tokens"] = generated["prompt_tokens"]
             result["completion_tokens"] = generated["completion_tokens"]
+            result["request_count"] = generated.get("request_count", 1)
+            result["finish_reason"] = generated.get("finish_reason", "invalid_schema_fallback")
             return result
         normalized = normalize_turn(parsed, generated["raw_text"], fallback)
         result = {
@@ -1970,6 +1998,8 @@ def invoke(
             "completion_tokens": generated["completion_tokens"],
             "backend": provider.backend,
             "phase": phase,
+            "request_count": generated.get("request_count", 1),
+            "finish_reason": generated.get("finish_reason", "completed"),
         }
         if schema_completed_fields:
             result["schema_completed_fields"] = schema_completed_fields
@@ -3648,6 +3678,60 @@ def stage_record(phase: str, round_number: int, turns: list[dict[str, Any]]) -> 
     }
 
 
+def build_model_call_trace(
+    stages: list[dict[str, Any]],
+    providers: dict[str, ModelProvider],
+    *,
+    run_id: str,
+    evidence_snapshot_id: str,
+) -> list[dict[str, Any]]:
+    """Create a credential-free call ledger from every debate turn."""
+    calls: list[dict[str, Any]] = []
+    prompt = debate_prompt_manifest()
+    for stage in stages:
+        phase = str(stage.get("phase") or "unknown")
+        round_number = int(stage.get("round") or 0)
+        for index, turn in enumerate(stage.get("turns") or []):
+            provider_name = "model_a" if index == 0 else "model_b"
+            provider = providers[provider_name]
+            request_count = max(0, int(turn.get("request_count") or 0))
+            status = "skipped" if turn.get("closing_skipped") else (
+                "fallback" if "fallback" in str(turn.get("backend") or "") else "completed"
+            )
+            call_number = len(calls) + 1
+            calls.append(
+                {
+                    "call_id": f"{run_id or 'unbound'}-model-{call_number:03d}",
+                    "run_id": run_id,
+                    "provider": provider.backend,
+                    "provider_slot": provider_name,
+                    "model": provider.model,
+                    "phase": phase,
+                    "round": round_number,
+                    "prompt_version": prompt,
+                    "input_digest": safe_digest(
+                        {
+                            "evidence_snapshot_id": evidence_snapshot_id,
+                            "phase": phase,
+                            "round": round_number,
+                            "provider_slot": provider_name,
+                        }
+                    ),
+                    "output_digest": safe_digest(
+                        {key: value for key, value in turn.items() if key != "raw_text"}
+                    ),
+                    "input_tokens": int(turn.get("prompt_tokens") or 0),
+                    "output_tokens": int(turn.get("completion_tokens") or 0),
+                    "latency_ms": int(turn.get("latency_ms") or 0),
+                    "retry_count": max(0, request_count - 1),
+                    "request_count": request_count,
+                    "finish_reason": str(turn.get("finish_reason") or status),
+                    "status": status,
+                }
+            )
+    return calls
+
+
 def compress_stage(stage: dict[str, Any]) -> dict[str, Any]:
     return {
         "phase": stage["phase"],
@@ -3763,6 +3847,8 @@ def with_metrics(fallback: dict[str, Any], backend: str, phase: str, prompt: str
         "latency_ms": 0,
         "prompt_tokens": estimate_tokens(prompt),
         "completion_tokens": estimate_tokens(json.dumps(fallback, ensure_ascii=False)),
+        "request_count": 0,
+        "finish_reason": "rule_fallback",
     }
 
 

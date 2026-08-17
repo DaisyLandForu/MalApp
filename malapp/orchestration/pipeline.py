@@ -7,6 +7,8 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
+from malapp.observability.context import exception_type, new_run_id, safe_digest
+
 PIPELINE_STAGES = (
     "NORMALIZE",
     "STATIC_EXTRACTION",
@@ -28,6 +30,9 @@ class StageRecord:
     completed_at: float | None = None
     latency_ms: float = 0.0
     error: str | None = None
+    error_type: str | None = None
+    input_digest: str | None = None
+    output_digest: str | None = None
     degradation_reasons: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
     _started_mono: float | None = field(default=None, repr=False)
@@ -40,19 +45,23 @@ class StageRecord:
             "completed_at": self.completed_at,
             "latency_ms": self.latency_ms,
             "error": self.error,
+            "error_type": self.error_type,
+            "input_digest": self.input_digest,
+            "output_digest": self.output_digest,
             "degradation_reasons": list(self.degradation_reasons),
             "metadata": dict(self.metadata),
         }
 
 
 class PipelineStateMachine:
-    def __init__(self, pipeline_id: str | None = None):
+    def __init__(self, pipeline_id: str | None = None, *, run_id: str | None = None):
+        self.run_id = run_id or new_run_id()
         self.pipeline_id = pipeline_id or f"pipeline-{uuid.uuid4().hex[:16]}"
         self.started_at = time.time()
         self._records = {name: StageRecord(name=name) for name in PIPELINE_STAGES}
         self._active: str | None = None
 
-    def start(self, stage: str) -> None:
+    def start(self, stage: str, input_data: Any = None) -> None:
         record = self._record(stage)
         if self._active is not None:
             raise RuntimeError(f"pipeline stage {self._active} is still active")
@@ -65,22 +74,38 @@ class PipelineStateMachine:
         record.status = "started"
         record.started_at = time.time()
         record._started_mono = time.monotonic()
+        record.input_digest = safe_digest(input_data)
         self._active = stage
 
-    def complete(self, stage: str, metadata: dict[str, Any] | None = None) -> None:
-        self._finish(stage, "completed", metadata=metadata)
+    def complete(self, stage: str, metadata: dict[str, Any] | None = None, *, output_data: Any = None) -> None:
+        self._finish(stage, "completed", metadata=metadata, output_data=output_data)
 
     def degrade(
         self,
         stage: str,
         reasons: list[str] | tuple[str, ...] | str,
         metadata: dict[str, Any] | None = None,
+        *,
+        output_data: Any = None,
     ) -> None:
         values = [reasons] if isinstance(reasons, str) else list(reasons)
-        self._finish(stage, "degraded", reasons=[str(item) for item in values], metadata=metadata)
+        self._finish(
+            stage,
+            "degraded",
+            reasons=[str(item) for item in values],
+            metadata=metadata,
+            output_data=output_data,
+        )
 
     def fail(self, stage: str, error: Exception | str, metadata: dict[str, Any] | None = None) -> None:
-        self._finish(stage, "failed", error=str(error), metadata=metadata)
+        self._finish(
+            stage,
+            "failed",
+            error=str(error),
+            error_type=exception_type(error),
+            metadata=metadata,
+            output_data=metadata,
+        )
 
     def skip(self, stage: str, reason: str, metadata: dict[str, Any] | None = None) -> None:
         record = self._record(stage)
@@ -101,6 +126,8 @@ class PipelineStateMachine:
         record.completed_at = now
         record.degradation_reasons = [str(reason)]
         record.metadata = dict(metadata or {})
+        record.input_digest = safe_digest({"reason": reason})
+        record.output_digest = safe_digest(record.metadata)
 
     def snapshot(self) -> dict[str, Any]:
         stages = [self._records[name].public() for name in PIPELINE_STAGES]
@@ -114,6 +141,7 @@ class PipelineStateMachine:
         else:
             status = "running"
         return {
+            "run_id": self.run_id,
             "pipeline_id": self.pipeline_id,
             "status": status,
             "started_at": self.started_at,
@@ -129,8 +157,10 @@ class PipelineStateMachine:
         status: str,
         *,
         error: str | None = None,
+        error_type: str | None = None,
         reasons: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
+        output_data: Any = None,
     ) -> None:
         record = self._record(stage)
         if self._active != stage or record.status != "started":
@@ -139,8 +169,10 @@ class PipelineStateMachine:
         record.completed_at = time.time()
         record.latency_ms = round((time.monotonic() - (record._started_mono or time.monotonic())) * 1000, 3)
         record.error = error
+        record.error_type = error_type
         record.degradation_reasons = list(reasons or [])
         record.metadata = dict(metadata or {})
+        record.output_digest = safe_digest(output_data if output_data is not None else record.metadata)
         self._active = None
 
     def _record(self, stage: str) -> StageRecord:

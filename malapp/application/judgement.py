@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
@@ -35,7 +36,7 @@ from malapp.rag import rag_context_for_sample
 ROOT = PROJECT_ROOT
 DATA_DIR = resolve_data_dir()
 DB_PATH = DATA_DIR / "mvp.db"
-REPORT_SCHEMA_VERSION = "agent-runtime-pipeline-v5.2-business-semantic-final"
+REPORT_SCHEMA_VERSION = "agent-runtime-pipeline-v6-observability-trace"
 
 VERDICT_LABELS = {
     "malicious": "恶意",
@@ -1126,6 +1127,8 @@ def clamp(value: float) -> float:
 def run_agents(
     sample: dict[str, Any],
     iocs: list[dict[str, Any]],
+    *,
+    run_id: str,
 ) -> tuple[list[EvidenceBlock], dict[str, Any], list[AgentResult]]:
     from malapp.inference.expert import ExpertModelProvider
 
@@ -1146,6 +1149,7 @@ def run_agents(
             if isinstance(sample.get("agent_runtime_config"), dict)
             else {}
         ),
+        run_id=run_id,
     )
     blocks = [block for result in results for block in result.evidence]
     runtime_report["results"] = [result.to_dict() for result in results]
@@ -1206,13 +1210,35 @@ def cached_report_usable(
     )
 
 
-def mark_history_reused(report: dict[str, Any], source: str) -> dict[str, Any]:
-    reused = dict(report)
+def mark_history_reused(
+    report: dict[str, Any],
+    source: str,
+    *,
+    run_id: str,
+    pipeline: PipelineStateMachine,
+) -> dict[str, Any]:
+    reused = copy.deepcopy(report)
+    previous_run_id = reused.get("run_id") or reused.get("execution", {}).get("run_id")
+    previous_pipeline = reused.get("execution", {}).get("pipeline")
+    reused["run_id"] = run_id
     reused["cache_hit"] = True
     reused["cache_source"] = source
     reused.setdefault("execution", {})
+    reused["execution"]["run_id"] = run_id
     reused["execution"]["history_reused"] = True
     reused["execution"]["history_reuse_source"] = source
+    reused["execution"]["cached_artifact_run_id"] = previous_run_id
+    reused["execution"]["cached_artifact_pipeline"] = previous_pipeline
+    reused["execution"]["pipeline"] = pipeline.snapshot()
+    reused.setdefault("preprocess", {})["agent_runtime"] = {
+        "run_id": run_id,
+        "request_id": run_id,
+        "status": "skipped",
+        "skip_reason": "history_cache_hit",
+        "agents": {},
+    }
+    reused.setdefault("debate", {})["run_id"] = run_id
+    reused["debate"]["model_calls"] = []
     return reused
 
 
@@ -1244,6 +1270,7 @@ def build_engine_c_skipped_report(
         wec_policy=decision["fusion"],
     )
     report = {
+        "run_id": pipeline.run_id,
         "report_id": hashlib.sha1(
             json.dumps(sample, sort_keys=True, ensure_ascii=False).encode("utf-8")
         ).hexdigest()[:16],
@@ -1252,7 +1279,16 @@ def build_engine_c_skipped_report(
         "runtime_snapshot": runtime_snapshot,
         "sample": sample,
         "engine_c": {**admission.to_dict(), "executed": False, "score_c": None},
-        "preprocess": {"unmapped_fields": unmapped, "agent_runtime": {"status": "skipped", "agents": {}}},
+        "preprocess": {
+            "unmapped_fields": unmapped,
+            "agent_runtime": {
+                "run_id": pipeline.run_id,
+                "request_id": pipeline.run_id,
+                "status": "skipped",
+                "skip_reason": "engine_c_not_admitted",
+                "agents": {},
+            },
+        },
         "evidence_blocks": [],
         "evidence_layers": {
             "raw_evidence": {},
@@ -1262,16 +1298,19 @@ def build_engine_c_skipped_report(
             "rag_context": {"enabled": False, "ready": False, "items": [], "skip_reason": "engine_c_not_admitted"},
         },
         "debate": {
+            "run_id": pipeline.run_id,
             "execution_mode": "skipped",
             "skip_reason": "engine_c_not_admitted",
             "debate_conformance": "not_executed",
             "arbiter": None,
             "stages": [],
+            "model_calls": [],
         },
         "decision": decision,
         "degradation": {"status": "healthy", "reasons": []},
         "next_steps": [],
         "execution": {
+            "run_id": pipeline.run_id,
             "orchestrator": "agent_runtime",
             "entrypoint": entrypoint,
             "service_pipeline": "malapp.agent-runtime.v2",
@@ -1286,6 +1325,14 @@ def build_engine_c_skipped_report(
     }
     init_db()
     insert_report(report)
+    try:
+        from malapp.observability.trace import save_agent_trace
+
+        trace = save_agent_trace(report)
+        report["execution"]["agent_trace_id"] = trace.get("trace_id")
+        insert_report(report)
+    except Exception as exc:
+        report["execution"]["agent_trace_error"] = str(exc)
     set_cached_report(sample, report)
     return report
 
@@ -1301,6 +1348,8 @@ def execute_judgement(raw_sample: dict[str, Any], *, entrypoint: str = "internal
     )
 
     pipeline = PipelineStateMachine()
+    run_id = pipeline.run_id
+    pipeline.start("NORMALIZE", raw_sample)
     try:
         raw_sample = dict(raw_sample)
         evaluation_config = (
@@ -1346,7 +1395,12 @@ def execute_judgement(raw_sample: dict[str, Any], *, entrypoint: str = "internal
             decision_params = merge_params(decision_params, normalized["decision_params"])
         admission = EngineCAdmissionPolicy(decision_params).decide(normalized)
         if not admission.execute:
-            for stage in pipeline.snapshot()["stage_order"]:
+            pipeline.skip(
+                "NORMALIZE",
+                "engine_c_not_admitted",
+                {"reason": admission.reason.value, "sample_id": normalized["sample_id"]},
+            )
+            for stage in pipeline.snapshot()["stage_order"][1:]:
                 pipeline.skip(stage, "engine_c_not_admitted", {"reason": admission.reason.value})
             return build_engine_c_skipped_report(
                 normalized,
@@ -1358,14 +1412,17 @@ def execute_judgement(raw_sample: dict[str, Any], *, entrypoint: str = "internal
                 admission=admission,
                 decision_params=decision_params,
             )
-        pipeline.start("NORMALIZE")
-        pipeline.complete("NORMALIZE", {"sample_id": normalized["sample_id"]})
+        pipeline.complete(
+            "NORMALIZE",
+            {"sample_id": normalized["sample_id"], "admission_reason": admission.reason.value},
+            output_data={"sample_id": normalized["sample_id"], "unmapped_fields": unmapped},
+        )
     except Exception as exc:
         if pipeline.snapshot()["by_name"]["NORMALIZE"]["status"] == "started":
             pipeline.fail("NORMALIZE", exc)
         raise
 
-    pipeline.start("STATIC_EXTRACTION")
+    pipeline.start("STATIC_EXTRACTION", normalized)
     try:
         apk_analysis: dict[str, Any] = {}
         apk_extracted, full_apk_analysis = analyze_apk_from_sample(normalized)
@@ -1388,6 +1445,7 @@ def execute_judgement(raw_sample: dict[str, Any], *, entrypoint: str = "internal
         pipeline.complete(
             "STATIC_EXTRACTION",
             {"apk_analyzed": bool(full_apk_analysis), "ioc_count": len(iocs)},
+            output_data={"sample_id": normalized["sample_id"], "iocs": iocs},
         )
     except Exception as exc:
         pipeline.fail("STATIC_EXTRACTION", exc)
@@ -1420,15 +1478,27 @@ def execute_judgement(raw_sample: dict[str, Any], *, entrypoint: str = "internal
             cached_source = "md5_report_cache"
     if cached_source and cached:
         for stage in ("AGENT_EXECUTION", "RAG_RETRIEVAL", "XGB_INFERENCE", "DEBATE", "FINAL_DECISION", "PERSIST"):
-            pipeline.skip(stage, "history_cache_hit")
-        reused = mark_history_reused(cached, cached_source)
+            pipeline.skip(stage, "history_cache_hit", {"cache_source": cached_source})
+        reused = mark_history_reused(
+            cached,
+            cached_source,
+            run_id=run_id,
+            pipeline=pipeline,
+        )
         reused.setdefault("execution", {})["entrypoint"] = entrypoint
-        reused["execution"]["cache_lookup_pipeline"] = pipeline.snapshot()
+        try:
+            from malapp.observability.trace import save_agent_trace
+
+            trace = save_agent_trace(reused)
+            reused["execution"]["agent_trace_id"] = trace.get("trace_id")
+            insert_report(reused)
+        except Exception as exc:
+            reused["execution"]["agent_trace_error"] = str(exc)
         return reused
 
-    pipeline.start("AGENT_EXECUTION")
+    pipeline.start("AGENT_EXECUTION", {"sample_id": normalized["sample_id"], "iocs": iocs})
     try:
-        evidence_blocks, agent_runtime, agent_results = run_agents(normalized, iocs)
+        evidence_blocks, agent_runtime, agent_results = run_agents(normalized, iocs, run_id=run_id)
         artifacts = {
             key: value
             for result in agent_results
@@ -1453,7 +1523,11 @@ def execute_judgement(raw_sample: dict[str, Any], *, entrypoint: str = "internal
         if degradation_codes:
             pipeline.degrade("AGENT_EXECUTION", degradation_codes, agent_metadata)
         else:
-            pipeline.complete("AGENT_EXECUTION", agent_metadata)
+            pipeline.complete(
+                "AGENT_EXECUTION",
+                agent_metadata,
+                output_data={"results": agent_runtime.get("results"), "artifact_keys": sorted(artifacts)},
+            )
     except Exception as exc:
         pipeline.fail("AGENT_EXECUTION", exc)
         raise
@@ -1469,7 +1543,10 @@ def execute_judgement(raw_sample: dict[str, Any], *, entrypoint: str = "internal
         apk_analysis=apk_analysis,
     )
 
-    pipeline.start("RAG_RETRIEVAL")
+    pipeline.start(
+        "RAG_RETRIEVAL",
+        {"sample_id": normalized["sample_id"], "evidence_agents": [block.agent for block in evidence_blocks]},
+    )
     try:
         rag_context = rag_context_for_sample(
             normalized,
@@ -1484,12 +1561,13 @@ def execute_judgement(raw_sample: dict[str, Any], *, entrypoint: str = "internal
                 "result_count": len(rag_context.get("items", [])),
                 "rag_snapshot_id": rag_context.get("rag_snapshot_id"),
             },
+            output_data={"rag_snapshot_id": rag_context.get("rag_snapshot_id"), "items": rag_context.get("items", [])},
         )
     except Exception as exc:
         rag_context = {"enabled": False, "ready": False, "query": "", "items": [], "error": str(exc)}
         pipeline.degrade("RAG_RETRIEVAL", ["rag_retrieval_failed"], {"error": str(exc)})
 
-    pipeline.start("XGB_INFERENCE")
+    pipeline.start("XGB_INFERENCE", {"sample_id": normalized["sample_id"], "md5": normalized.get("md5")})
     xgb_result = None
     try:
         from malapp.inference.xgboost import predict as predict_xgb
@@ -1498,7 +1576,11 @@ def execute_judgement(raw_sample: dict[str, Any], *, entrypoint: str = "internal
         if xgb_result is None:
             pipeline.skip("XGB_INFERENCE", "xgboost_unavailable_or_disabled")
         else:
-            pipeline.complete("XGB_INFERENCE", {"verdict": xgb_result.get("verdict")})
+            pipeline.complete(
+                "XGB_INFERENCE",
+                {"verdict": xgb_result.get("verdict")},
+                output_data=xgb_result,
+            )
     except Exception as exc:
         pipeline.degrade("XGB_INFERENCE", ["xgboost_inference_failed"], {"error": str(exc)})
     if valid_md5(normalized.get("md5")):
@@ -1523,6 +1605,7 @@ def execute_judgement(raw_sample: dict[str, Any], *, entrypoint: str = "internal
         debate_config["xgb_prior"] = xgb_result
     debate_config["rag_context"] = rag_context
     debate_config["sample_id"] = normalized["sample_id"]
+    debate_config["run_id"] = run_id
     debate_config["canonical_evidence_envelope"] = evidence_envelope
     from malapp.inference.expert import explanation_layer
 
@@ -1545,18 +1628,35 @@ def execute_judgement(raw_sample: dict[str, Any], *, entrypoint: str = "internal
         "initial_only",
     }
 
-    pipeline.start("DEBATE")
+    pipeline.start(
+        "DEBATE",
+        {
+            "evidence_snapshot_id": evidence_envelope.get("evidence_snapshot_id"),
+            "evidence_ids": evidence_envelope.get("evidence_ids"),
+        },
+    )
     try:
         debate_result = debate(debate_evidence, debate_config)
         pipeline.complete(
             "DEBATE",
             {"execution_mode": debate_result.get("execution_mode", "full_debate")},
+            output_data={
+                "arbiter": debate_result.get("arbiter"),
+                "model_calls": debate_result.get("model_calls", []),
+            },
         )
     except Exception as exc:
         pipeline.fail("DEBATE", exc)
         raise
 
-    pipeline.start("FINAL_DECISION")
+    pipeline.start(
+        "FINAL_DECISION",
+        {
+            "arbiter": debate_result.get("arbiter"),
+            "agent_scores": {block.agent: block.score for block in evidence_blocks},
+            "xgb": xgb_result,
+        },
+    )
     try:
         decision = collaborative_decision(
             normalized,
@@ -1573,7 +1673,11 @@ def execute_judgement(raw_sample: dict[str, Any], *, entrypoint: str = "internal
                 {"verdict": decision["verdict"], "review_required": decision["review_required"]},
             )
         else:
-            pipeline.complete("FINAL_DECISION", {"verdict": decision["verdict"]})
+            pipeline.complete(
+                "FINAL_DECISION",
+                {"verdict": decision["verdict"]},
+                output_data=decision,
+            )
     except Exception as exc:
         pipeline.fail("FINAL_DECISION", exc)
         raise
@@ -1581,7 +1685,10 @@ def execute_judgement(raw_sample: dict[str, Any], *, entrypoint: str = "internal
     from malapp.governance.runtime import save_runtime_snapshot
     from malapp.inference.settings import model_cache_signature
 
-    pipeline.start("PERSIST")
+    pipeline.start(
+        "PERSIST",
+        {"sample_id": normalized["sample_id"], "runtime_snapshot_pending": True},
+    )
     runtime_snapshot = save_runtime_snapshot(
         debate_result=debate_result,
         xgb_result=xgb_result,
@@ -1595,6 +1702,7 @@ def execute_judgement(raw_sample: dict[str, Any], *, entrypoint: str = "internal
         wec_policy=decision.get("wec"),
     )
     report = {
+        "run_id": run_id,
         "report_id": hashlib.sha1(json.dumps(normalized, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()[:16],
         "report_schema_version": REPORT_SCHEMA_VERSION,
         "created_at": utc_now(),
@@ -1632,6 +1740,7 @@ def execute_judgement(raw_sample: dict[str, Any], *, entrypoint: str = "internal
             "补充已标注样本，用于校准 WEC 阈值和动态权重。",
         ],
         "execution": {
+            "run_id": run_id,
             "orchestrator": "agent_runtime",
             "entrypoint": entrypoint,
             "service_pipeline": "malapp.agent-runtime.v2",
@@ -1647,7 +1756,11 @@ def execute_judgement(raw_sample: dict[str, Any], *, entrypoint: str = "internal
     }
     try:
         insert_report(report)
-        pipeline.complete("PERSIST", {"report_id": report["report_id"]})
+        pipeline.complete(
+            "PERSIST",
+            {"report_id": report["report_id"]},
+            output_data={"report_id": report["report_id"], "runtime_snapshot_id": runtime_snapshot["snapshot_id"]},
+        )
         report["execution"]["pipeline"] = pipeline.snapshot()
     except Exception as exc:
         pipeline.fail("PERSIST", exc)

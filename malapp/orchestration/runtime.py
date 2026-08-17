@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import time
-import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 
 from malapp.agents.base import Agent, AgentContext, AgentResult, EvidenceBlock
+from malapp.observability.context import new_run_id
 
 
 @dataclass(frozen=True)
@@ -47,8 +47,10 @@ class AgentRuntime:
         iocs: list[dict[str, Any]] | None = None,
         config: dict[str, Any] | None = None,
         metadata: dict[str, Any] | None = None,
+        run_id: str | None = None,
     ) -> tuple[list[AgentResult], dict[str, Any]]:
-        request_id = uuid.uuid4().hex[:16]
+        run_id = run_id or new_run_id()
+        request_id = run_id
         runtime_config = config if isinstance(config, dict) else {}
         agents = self.registry.all()
         max_workers = bounded_int(runtime_config.get("max_workers"), len(agents) or 1, 1, len(agents) or 1)
@@ -77,14 +79,14 @@ class AgentRuntime:
         try:
             for agent in agents:
                 policy = policies[agent.name]
-                append_event(lifecycle, traces[agent.name], agent.name, "registered", "created", "agent registered")
+                append_event(lifecycle, traces[agent.name], agent.name, "registered", "created", "agent registered", run_id)
                 if not policy.enabled:
                     result = degraded_result(agent.name, "agent disabled by runtime config", "disabled", "skipped")
                     results[agent.name] = result
-                    append_event(lifecycle, traces[agent.name], agent.name, "skipped", "disabled", result.error or "")
+                    append_event(lifecycle, traces[agent.name], agent.name, "skipped", "disabled", result.error or "", run_id)
                     continue
                 future_started[agent.name] = time.monotonic()
-                append_event(lifecycle, traces[agent.name], agent.name, "started", "running", "agent execution started")
+                append_event(lifecycle, traces[agent.name], agent.name, "started", "running", "agent execution started", run_id)
                 futures[executor.submit(run_with_retries, agent, context, policy, faults.get(agent.name))] = agent
 
             while futures:
@@ -105,6 +107,7 @@ class AgentRuntime:
                             phase,
                             result.status,
                             result.error or f"completed in {elapsed_ms:.3f} ms",
+                            run_id,
                         )
                         futures.pop(future)
                     elif elapsed_ms >= policy.timeout_ms:
@@ -117,7 +120,7 @@ class AgentRuntime:
                             latency_ms=elapsed_ms,
                         )
                         results[agent.name] = result
-                        append_event(lifecycle, traces[agent.name], agent.name, "timeout", "timeout", result.error or "")
+                        append_event(lifecycle, traces[agent.name], agent.name, "timeout", "timeout", result.error or "", run_id)
                         futures.pop(future)
                 if futures:
                     time.sleep(0.005)
@@ -127,6 +130,7 @@ class AgentRuntime:
         ordered_results = [results[agent.name] for agent in agents]
         runtime_status = "healthy" if all(item.status == "completed" for item in ordered_results) else "degraded"
         report = {
+            "run_id": run_id,
             "request_id": request_id,
             "status": runtime_status,
             "started_at": started_wall,
@@ -192,10 +196,10 @@ def run_with_retries(
             if result.agent_name != agent.name:
                 raise ValueError(f"agent result name mismatch: expected {agent.name}, got {result.agent_name}")
             result.attempts = attempt
-            events.append(runtime_event(agent.name, "attempt", "completed", f"attempt {attempt} completed"))
+            events.append(runtime_event(agent.name, "attempt", "completed", f"attempt {attempt} completed", context.request_id))
             return result, events
         except Exception as exc:
-            events.append(runtime_event(agent.name, "attempt", "failed", f"attempt {attempt}: {exc}"))
+            events.append(runtime_event(agent.name, "attempt", "failed", f"attempt {attempt}: {exc}", context.request_id))
             if attempt > policy.max_retries:
                 timed_out = isinstance(exc, TimeoutError)
                 result = degraded_result(
@@ -278,14 +282,16 @@ def append_event(
     phase: str,
     status: str,
     message: str,
+    run_id: str,
 ) -> None:
-    item = runtime_event(agent, phase, status, message)
+    item = runtime_event(agent, phase, status, message, run_id)
     lifecycle.append(item)
     trace.append(dict(item))
 
 
-def runtime_event(agent: str, phase: str, status: str, message: str) -> dict[str, Any]:
+def runtime_event(agent: str, phase: str, status: str, message: str, run_id: str = "") -> dict[str, Any]:
     return {
+        "run_id": run_id,
         "agent": agent,
         "phase": phase,
         "status": status,

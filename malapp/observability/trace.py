@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from malapp.observability.context import sanitized
+
 ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = Path(os.getenv("MALAPP_DATA_DIR", str(ROOT / "data"))).expanduser().resolve()
 DB_PATH = DATA_DIR / "mvp.db"
@@ -29,6 +31,7 @@ def init_trace_tables() -> None:
             """
             CREATE TABLE IF NOT EXISTS agent_traces (
                 trace_id TEXT PRIMARY KEY,
+                run_id TEXT,
                 report_id TEXT NOT NULL,
                 sample_id TEXT,
                 md5 TEXT,
@@ -39,6 +42,12 @@ def init_trace_tables() -> None:
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_agent_traces_report ON agent_traces(report_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_agent_traces_md5 ON agent_traces(md5)")
+        trace_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(agent_traces)").fetchall()
+        }
+        if "run_id" not in trace_columns:
+            conn.execute("ALTER TABLE agent_traces ADD COLUMN run_id TEXT")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_agent_traces_run ON agent_traces(run_id)")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS human_reviews (
@@ -109,7 +118,8 @@ def build_agent_trace(report: dict[str, Any]) -> dict[str, Any]:
     decision = report.get("decision") or {}
     execution = report.get("execution") or {}
     evidence_layers = report.get("evidence_layers") or {}
-    trace_id = f"trace-{uuid.uuid4().hex[:16]}"
+    run_id = str(report.get("run_id") or execution.get("run_id") or "")
+    trace_id = f"trace-{run_id.removeprefix('run-')}" if run_id else f"trace-{report.get('report_id')}"
     runtime_snapshot = report.get("runtime_snapshot") or {}
     if not runtime_snapshot:
         try:
@@ -118,8 +128,9 @@ def build_agent_trace(report: dict[str, Any]) -> dict[str, Any]:
             runtime_snapshot = save_runtime_snapshot()
         except Exception as exc:
             runtime_snapshot = {"error": str(exc)}
-    return {
+    trace = {
         "trace_id": trace_id,
+        "run_id": run_id,
         "report_id": report.get("report_id"),
         "created_at": now_iso(),
         "sample": {
@@ -141,6 +152,7 @@ def build_agent_trace(report: dict[str, Any]) -> dict[str, Any]:
         "agent_outputs": report.get("evidence_blocks") or [],
         "llm_explanation": evidence_layers.get("llm_explanation"),
         "debate": {
+            "run_id": debate.get("run_id"),
             "providers": debate.get("providers"),
             "execution_mode": debate.get("execution_mode"),
             "model_a": debate.get("model_a"),
@@ -149,12 +161,14 @@ def build_agent_trace(report: dict[str, Any]) -> dict[str, Any]:
             "stages": debate.get("stages"),
             "arbiter": debate.get("arbiter"),
             "timings": debate.get("timings") or debate.get("metrics"),
+            "model_calls": debate.get("model_calls") or [],
         },
         "decision": decision,
         "execution": execution,
         "evaluation_metadata": report.get("evaluation_metadata") or {},
         "runtime_snapshot": runtime_snapshot,
     }
+    return sanitized(trace)
 
 
 def save_agent_trace(report: dict[str, Any]) -> dict[str, Any]:
@@ -166,11 +180,12 @@ def save_agent_trace(report: dict[str, Any]) -> dict[str, Any]:
         conn.execute(
             """
             INSERT OR REPLACE INTO agent_traces
-            (trace_id, report_id, sample_id, md5, created_at, payload_json)
-            VALUES (?, ?, ?, ?, ?, ?)
+            (trace_id, run_id, report_id, sample_id, md5, created_at, payload_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 trace["trace_id"],
+                trace.get("run_id"),
                 trace.get("report_id") or "",
                 sample.get("sample_id"),
                 sample.get("md5"),
@@ -184,12 +199,14 @@ def save_agent_trace(report: dict[str, Any]) -> dict[str, Any]:
     return trace
 
 
-def get_trace(report_id: str = "", trace_id: str = "") -> dict[str, Any] | None:
+def get_trace(report_id: str = "", trace_id: str = "", run_id: str = "") -> dict[str, Any] | None:
     init_trace_tables()
     conn = connect()
     try:
         if trace_id:
             row = conn.execute("SELECT payload_json FROM agent_traces WHERE trace_id = ?", (trace_id,)).fetchone()
+        elif run_id:
+            row = conn.execute("SELECT payload_json FROM agent_traces WHERE run_id = ?", (run_id,)).fetchone()
         else:
             row = conn.execute(
                 "SELECT payload_json FROM agent_traces WHERE report_id = ? ORDER BY created_at DESC LIMIT 1",

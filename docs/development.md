@@ -20,6 +20,7 @@ python -m apps.server.main
 
 ```bash
 python -m compileall -q apps malapp integrations training scripts
+python -m ruff check apps malapp integrations training scripts tests
 python -m pytest
 ```
 
@@ -27,7 +28,10 @@ python -m pytest
 
 | 目标 | 文件 |
 |---|---|
-| HTTP API | `apps/server/main.py` |
+| HTTP 应用工厂 | `apps/server/app.py` |
+| 安全配置与中间件 | `apps/server/config.py`、`auth.py`、`middleware.py` |
+| 分域 HTTP 路由 | `apps/server/routes/` |
+| 服务启动入口 | `apps/server/main.py` |
 | 单样本研判 | `malapp/application/judgement.py` |
 | 批量研判 | `malapp/application/batch.py` |
 | 四 Agent 调度 | `malapp/orchestration/agent_runtime.py` |
@@ -48,9 +52,16 @@ APK 和图标路径只能位于 `MALAPP_WORKSPACE_ROOT`；本地默认值是仓�
 ## 调试顺序
 
 1. `/api/health` 检查服务、版本和 Profile。
-2. `/api/model/settings` 检查 Provider 状态；该接口不会回显 API key。
+2. 使用 Admin Bearer Token 调用 `/api/model/settings` 检查 Provider 状态；该接口不会回显 API key。
 3. `/api/rag/status` 和 `/api/xgb/status` 检查可选组件。
 4. 用 `config/defaults/sample_conflict.json` 验证完整研判链。
 5. 通过报告中的 `preprocess.agent_runtime`、`debate` 和 `decision.decision_trace` 定位阶段错误。
 
 不要在源码、测试或文档中写入真实 endpoint、Secret、作者机器路径或私有数据文件名。
+
+生产模式会在启动阶段验证 API Key 和模型 Host allowlist。测试不同权限时建议设置两个 Key：
+
+```bash
+MALAPP_API_KEY=test-user
+MALAPP_ADMIN_API_KEY=test-admin
+```

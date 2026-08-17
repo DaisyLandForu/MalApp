@@ -39,4 +39,4 @@ MALAPP_RAG_EMBED_LOCAL_FILES_ONLY=1
 - `POST /api/rag/graph-search`
 - `POST /api/rag/rebuild-graph`
 
-共享部署应配置 `MALAPP_RAG_API_KEY`，并由统一 API 鉴权覆盖所有管理接口。
+共享部署统一使用 `MALAPP_API_KEY`/`MALAPP_ADMIN_API_KEY` Bearer 鉴权。远端 RAG 客户端通过 `MALAPP_RAG_REMOTE_API_KEY` 发送同一 Bearer Token，不再使用独立自定义请求头。

@@ -15,6 +15,7 @@ from typing import Any
 
 from malapp.agents.skill_context import build_debate_skill_context, compact_skill_context
 from malapp.inference.local_qwen import local_qwen_enabled, normalize_llm_result, parse_model_json, qwen_generate
+from malapp.inference.url_policy import validate_model_endpoint
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = Path(os.getenv("MALAPP_DATA_DIR", str(ROOT / "data"))).expanduser().resolve()
@@ -1190,7 +1191,7 @@ class ModelProvider:
         self.name = name
         self.backend = backend
         self.model = model
-        self.api_url = api_url
+        self.api_url = validate_model_endpoint(api_url) if backend == "openai_compatible" else ""
         self.api_key = api_key
 
     def generate(self, system_prompt: str, user_prompt: str, max_tokens: int = 160) -> dict[str, Any]:
@@ -1403,17 +1404,21 @@ class ModelProvider:
 def build_provider(name: str, config: dict[str, Any]) -> ModelProvider:
     item = config.get(name, {}) if isinstance(config.get(name), dict) else {}
     suffix = "A" if name == "model_a" else "B"
-    api_url = str(item.get("api_url") or os.getenv(f"MALAPP_MODEL_{suffix}_API_URL", ""))
+    server_enabled = os.getenv("MALAPP_USE_SERVER_MODELS", "0").strip().lower() in {"1", "true", "yes", "on"}
+    api_url = str(os.getenv(f"MALAPP_MODEL_{suffix}_API_URL", "")) if server_enabled else ""
     model = str(
-        item.get("model")
-        or os.getenv(f"MALAPP_MODEL_{suffix}_MODEL", "")
+        os.getenv(f"MALAPP_MODEL_{suffix}_MODEL", "")
         or os.getenv("MALAPP_QWEN_MODEL", "Qwen/Qwen2.5-0.5B-Instruct")
     )
-    api_key = str(item.get("api_key") or os.getenv(f"MALAPP_MODEL_{suffix}_API_KEY", ""))
-    backend = str(
-        item.get("backend")
-        or ("openai_compatible" if api_url else "local_qwen" if local_qwen_enabled() else "rule")
-    )
+    api_key = str(os.getenv(f"MALAPP_MODEL_{suffix}_API_KEY", ""))
+    backend = "openai_compatible" if api_url else "local_qwen" if local_qwen_enabled() else "rule"
+    # Evaluation fixtures may name a rule-only provider in non-production
+    # profiles. Network endpoints and credentials are never accepted here.
+    if os.getenv("MALAPP_PROFILE", "demo").strip().lower() != "production" and item.get("backend") == "rule":
+        backend = "rule"
+        model = str(item.get("model") or model)
+        api_url = ""
+        api_key = ""
     return ModelProvider(name, backend, model, api_url, api_key)
 
 
@@ -3824,7 +3829,5 @@ def verdict_label(score: float, calibration: dict[str, Any] | None = None) -> st
     return {"malicious": "恶意", "suspicious": "可疑", "benign": "良性"}[
         verdict_from_score(score, calibration)
     ]
-
-
 
 

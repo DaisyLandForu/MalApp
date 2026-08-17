@@ -8,14 +8,25 @@ from pathlib import Path
 from typing import Any
 
 from malapp.application.judgement import DATA_DIR
+from malapp.inference.url_policy import validate_model_endpoint, validate_model_pair
 
 SETTINGS_PATH = DATA_DIR / "model_settings.json"
 DEFAULT_LOCAL_MODEL = "Qwen/Qwen2.5-0.5B-Instruct"
 DEFAULT_SERVER_A_URL = ""
 DEFAULT_SERVER_A_MODEL = ""
-DEFAULT_SERVER_A_API_KEY = ""
 DEFAULT_SERVER_B_URL = ""
 DEFAULT_SERVER_B_MODEL = ""
+
+PERSISTED_SETTING_KEYS = (
+    "server_models_enabled",
+    "model_a_api_url",
+    "model_a_model",
+    "model_b_api_url",
+    "model_b_model",
+    "local_qwen_enabled",
+    "model",
+)
+SECRET_SETTING_KEYS = frozenset({"model_a_api_key", "model_b_api_key"})
 
 
 def _env_enabled(name: str, default: str = "0") -> bool:
@@ -26,7 +37,7 @@ def default_model_settings() -> dict[str, Any]:
     return {
         "server_models_enabled": _env_enabled("MALAPP_USE_SERVER_MODELS", "0"),
         "model_a_api_url": os.getenv("MALAPP_MODEL_A_API_URL", DEFAULT_SERVER_A_URL),
-        "model_a_api_key": os.getenv("MALAPP_MODEL_A_API_KEY", DEFAULT_SERVER_A_API_KEY),
+        "model_a_api_key": os.getenv("MALAPP_MODEL_A_API_KEY", ""),
         "model_a_model": os.getenv("MALAPP_MODEL_A_MODEL", DEFAULT_SERVER_A_MODEL),
         "model_b_api_url": os.getenv("MALAPP_MODEL_B_API_URL", DEFAULT_SERVER_B_URL),
         "model_b_api_key": os.getenv("MALAPP_MODEL_B_API_KEY", ""),
@@ -43,68 +54,81 @@ def load_model_settings() -> dict[str, Any]:
 
 
 def load_model_settings_without_apply() -> dict[str, Any]:
-    settings = default_model_settings()
+    settings = {
+        "server_models_enabled": False,
+        "model_a_api_url": DEFAULT_SERVER_A_URL,
+        "model_a_model": DEFAULT_SERVER_A_MODEL,
+        "model_b_api_url": DEFAULT_SERVER_B_URL,
+        "model_b_model": DEFAULT_SERVER_B_MODEL,
+        "local_qwen_enabled": False,
+        "model": DEFAULT_LOCAL_MODEL,
+    }
     try:
         saved = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
     except (OSError, ValueError, json.JSONDecodeError):
         saved = {}
     if isinstance(saved, dict):
-        for key in settings:
+        for key in PERSISTED_SETTING_KEYS:
             if key in saved and saved[key] not in (None, ""):
                 settings[key] = saved[key]
         settings["server_models_enabled"] = bool(settings.get("server_models_enabled"))
         settings["local_qwen_enabled"] = bool(settings.get("local_qwen_enabled"))
+        if SECRET_SETTING_KEYS.intersection(saved):
+            _write_public_settings(settings)
+
+    environment_overrides = {
+        "server_models_enabled": "MALAPP_USE_SERVER_MODELS",
+        "model_a_api_url": "MALAPP_MODEL_A_API_URL",
+        "model_a_model": "MALAPP_MODEL_A_MODEL",
+        "model_b_api_url": "MALAPP_MODEL_B_API_URL",
+        "model_b_model": "MALAPP_MODEL_B_MODEL",
+        "local_qwen_enabled": "MALAPP_USE_LOCAL_QWEN",
+        "model": "MALAPP_QWEN_MODEL",
+    }
+    for key, environment_name in environment_overrides.items():
+        if environment_name not in os.environ:
+            continue
+        settings[key] = (
+            _env_enabled(environment_name)
+            if key.endswith("_enabled")
+            else os.environ[environment_name]
+        )
+    settings["model_a_api_key"] = os.getenv("MALAPP_MODEL_A_API_KEY", "")
+    settings["model_b_api_key"] = os.getenv("MALAPP_MODEL_B_API_KEY", "")
     return settings
 
 
 def update_model_settings(payload: dict[str, Any]) -> dict[str, Any]:
+    if SECRET_SETTING_KEYS.intersection(payload):
+        raise ValueError("model API keys must be provided through environment variables")
     current = load_model_settings_without_apply()
     updated = dict(current)
-    for key in (
-        "server_models_enabled",
-        "model_a_api_url",
-        "model_a_api_key",
-        "model_a_model",
-        "model_b_api_url",
-        "model_b_api_key",
-        "model_b_model",
-        "local_qwen_enabled",
-        "model",
-    ):
+    for key in PERSISTED_SETTING_KEYS:
         if key in payload:
             value = payload[key]
-            if key in {"model_a_api_key", "model_b_api_key"} and value in (None, ""):
-                continue
             updated[key] = bool(value) if key.endswith("_enabled") else str(value or "")
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    SETTINGS_PATH.write_text(
-        json.dumps(updated, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    validate_model_pair(updated)
+    _write_public_settings(updated)
     apply_model_settings(updated)
     return model_runtime_status(check_remote=True)
+
+
+def _write_public_settings(settings: dict[str, Any]) -> None:
+    SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    public = {key: settings.get(key) for key in PERSISTED_SETTING_KEYS}
+    SETTINGS_PATH.write_text(
+        json.dumps(public, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
 
 def apply_model_settings(settings: dict[str, Any]) -> None:
     server_enabled = bool(settings.get("server_models_enabled"))
     os.environ["MALAPP_USE_SERVER_MODELS"] = "1" if server_enabled else "0"
-    if server_enabled:
-        os.environ["MALAPP_MODEL_A_API_URL"] = str(settings.get("model_a_api_url") or "")
-        os.environ["MALAPP_MODEL_A_API_KEY"] = str(settings.get("model_a_api_key") or "")
-        os.environ["MALAPP_MODEL_A_MODEL"] = str(settings.get("model_a_model") or DEFAULT_SERVER_A_MODEL)
-        os.environ["MALAPP_MODEL_B_API_URL"] = str(settings.get("model_b_api_url") or "")
-        os.environ["MALAPP_MODEL_B_API_KEY"] = str(settings.get("model_b_api_key") or "")
-        os.environ["MALAPP_MODEL_B_MODEL"] = str(settings.get("model_b_model") or DEFAULT_SERVER_B_MODEL)
-    else:
-        for key in (
-            "MALAPP_MODEL_A_API_URL",
-            "MALAPP_MODEL_A_API_KEY",
-            "MALAPP_MODEL_A_MODEL",
-            "MALAPP_MODEL_B_API_URL",
-            "MALAPP_MODEL_B_API_KEY",
-            "MALAPP_MODEL_B_MODEL",
-        ):
-            os.environ.pop(key, None)
+    os.environ["MALAPP_MODEL_A_API_URL"] = str(settings.get("model_a_api_url") or "")
+    os.environ["MALAPP_MODEL_A_MODEL"] = str(settings.get("model_a_model") or DEFAULT_SERVER_A_MODEL)
+    os.environ["MALAPP_MODEL_B_API_URL"] = str(settings.get("model_b_api_url") or "")
+    os.environ["MALAPP_MODEL_B_MODEL"] = str(settings.get("model_b_model") or DEFAULT_SERVER_B_MODEL)
 
     os.environ["MALAPP_USE_LOCAL_QWEN"] = "1" if settings.get("local_qwen_enabled") else "0"
     os.environ["MALAPP_QWEN_MODEL"] = str(settings.get("model") or DEFAULT_LOCAL_MODEL)
@@ -112,11 +136,36 @@ def apply_model_settings(settings: dict[str, Any]) -> None:
 
 def model_runtime_status(check_remote: bool = True) -> dict[str, Any]:
     settings = load_model_settings_without_apply()
+    validation_error = ""
+    try:
+        validate_model_pair(settings)
+    except ValueError as exc:
+        validation_error = str(exc)
     apply_model_settings(settings)
     profile = os.getenv("MALAPP_PROFILE", "demo").strip().lower()
 
     server_enabled = bool(settings.get("server_models_enabled"))
-    if check_remote:
+    if not server_enabled:
+        model_a = unchecked_server_model_status(
+            str(settings.get("model_a_api_url") or ""),
+            str(settings.get("model_a_model") or ""),
+        )
+        model_b = unchecked_server_model_status(
+            str(settings.get("model_b_api_url") or ""),
+            str(settings.get("model_b_model") or ""),
+        )
+    elif validation_error:
+        model_a = unchecked_server_model_status(
+            str(settings.get("model_a_api_url") or ""),
+            str(settings.get("model_a_model") or ""),
+        )
+        model_b = unchecked_server_model_status(
+            str(settings.get("model_b_api_url") or ""),
+            str(settings.get("model_b_model") or ""),
+        )
+        model_a["message"] = validation_error
+        model_b["message"] = validation_error
+    elif check_remote:
         model_a = server_model_status(
             str(settings.get("model_a_api_url") or ""),
             str(settings.get("model_a_model") or ""),
@@ -136,7 +185,7 @@ def model_runtime_status(check_remote: bool = True) -> dict[str, Any]:
             str(settings.get("model_b_api_url") or ""),
             str(settings.get("model_b_model") or ""),
         )
-    server_ready = server_enabled and model_a["ready"] and model_b["ready"]
+    server_ready = server_enabled and not validation_error and model_a["ready"] and model_b["ready"]
 
     dependencies = {
         name: importlib.util.find_spec(name) is not None
@@ -238,6 +287,10 @@ def ensure_runtime_ready_for_judgement() -> dict[str, Any]:
 def unchecked_server_model_status(api_url: str, model: str) -> dict[str, Any]:
     if not api_url or not model:
         return {"ready": False, "api_url": api_url, "model": model, "available_models": [], "message": "API 地址或模型名为空"}
+    try:
+        api_url = validate_model_endpoint(api_url)
+    except ValueError as exc:
+        return {"ready": False, "api_url": "", "model": model, "available_models": [], "message": str(exc)}
     return {
         "ready": False,
         "api_url": api_url,
@@ -250,6 +303,10 @@ def unchecked_server_model_status(api_url: str, model: str) -> dict[str, Any]:
 def server_model_status(api_url: str, model: str, api_key: str = "") -> dict[str, Any]:
     if not api_url or not model:
         return {"ready": False, "message": "API 地址或模型名为空"}
+    try:
+        api_url = validate_model_endpoint(api_url)
+    except ValueError as exc:
+        return {"ready": False, "api_url": "", "model": model, "available_models": [], "message": str(exc)}
     request = urllib.request.Request(
         api_url.rstrip("/") + "/models",
         headers={**({"Authorization": f"Bearer {api_key}"} if api_key else {})},

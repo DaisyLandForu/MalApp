@@ -28,6 +28,7 @@ Web / JSON API / Hermes MCP
 
 ```text
 apps/                 可执行应用：HTTP 服务、模型 Worker、Web UI
+  server/             FastAPI 应用、安全中间件与分域路由
 malapp/               在线研判核心包
   agents/             四领域 Agent 与证据处理
   application/        单样本、批处理和 Dashboard 用例
@@ -73,6 +74,16 @@ http://127.0.0.1:8765/api/health
 
 首次启动会把 `malapp/config/defaults/` 中的 schema、字段映射和 Demo 样本复制到运行数据目录。运行数据、模型和训练产物不提交到 Git。
 
+`demo`/`offline` 未设置 `MALAPP_API_KEY` 时保留本机开发体验；一旦设置 Key，除页面和健康检查外的 API 都要求 Bearer Token：
+
+```bash
+export MALAPP_API_KEY=local-user-key
+export MALAPP_ADMIN_API_KEY=local-admin-key
+curl -H 'Authorization: Bearer local-user-key' http://127.0.0.1:8765/api/sample
+```
+
+Web 页面第一次收到 401 时会提示输入 Key，Key 只保存在当前浏览器会话。
+
 ## Docker
 
 ```bash
@@ -91,9 +102,21 @@ MALAPP_EXTRAS=[ml]
 
 - `demo`：无外部模型时运行确定性证据链，用于页面和工程演示。
 - `offline`：只运行本地分析组件，不依赖外部网络。
-- `production`：应配置真实 OpenAI-compatible Provider，并在网关后启用认证、限流和 Secret 管理。
+- `production`：必须配置 `MALAPP_API_KEY` 和真实 OpenAI-compatible Provider；可以用独立的 `MALAPP_ADMIN_API_KEY` 区分普通调用方和管理接口。
 
-源码不再包含作者内网模型地址。模型 endpoint 和 API key 只能通过本地环境或运行配置提供；状态 API 不回显 Secret。
+模型 endpoint 可以保存为非敏感运行配置，模型 API Key 只能通过环境变量或 Secret Manager 注入，不会写入 runtime JSON、API 响应或 Trace。生产模型 endpoint 必须命中 `MALAPP_MODEL_ALLOWED_HOSTS`。
+
+主要安全配置：
+
+```dotenv
+MALAPP_MAX_JSON_BYTES=2097152
+MALAPP_MAX_UPLOAD_BYTES=67108864
+MALAPP_MAX_QUERY_LIMIT=1000
+MALAPP_MAX_BATCH_ITEMS=1000
+MALAPP_MAX_RAG_TOP_K=50
+MALAPP_MAX_GRAPH_HOPS=3
+MALAPP_MAX_EXCEL_ROWS=5000
+```
 
 ## Optional capabilities
 
@@ -117,6 +140,7 @@ python -m scripts.training.build_corpora --help
 
 ```bash
 python -m pytest
+python -m ruff check apps malapp integrations training scripts tests
 python -m compileall -q apps malapp integrations training scripts
 ```
 
@@ -129,4 +153,4 @@ python -m compileall -q apps malapp integrations training scripts
 - [评测](docs/evaluation/plan.md)
 - [训练闭环](docs/training-loop.md)
 
-项目只对 APK 做静态解析，不执行未知 APK。生产部署前仍需补充统一 API 鉴权、上传限额、模型 URL allowlist 和正式数据库迁移机制。
+项目只对 APK 做静态解析，不执行未知 APK。公网生产部署仍应使用 API Gateway/TLS、上游限流、Secret Manager，并补充正式数据库迁移机制。

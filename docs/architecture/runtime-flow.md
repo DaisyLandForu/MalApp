@@ -3,7 +3,7 @@
 ## 主链路
 
 ```text
-HTTP / Hermes MCP
+FastAPI / Hermes MCP
        ↓
 Judgement Application
        ↓
@@ -24,7 +24,7 @@ Report + Agent Trace + Reward
 
 ## 分层职责
 
-- `apps/server`：协议转换和 HTTP 响应。
+- `apps/server`：FastAPI 协议转换、Bearer 鉴权、请求限额和分域路由；不承载业务研判逻辑。
 - `malapp/application`：组织单样本、批处理和 Dashboard 用例。
 - `malapp/agents`：只分析本领域并返回可追溯证据。
 - `malapp/orchestration`：并发、重试、辩论和决策。

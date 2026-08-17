@@ -415,7 +415,7 @@ def _remote_hybrid_context(
     headers = {"Content-Type": "application/json"}
     api_key = str(os.getenv("MALAPP_RAG_REMOTE_API_KEY", "")).strip()
     if api_key:
-        headers["X-MalApp-Rag-Key"] = api_key
+        headers["Authorization"] = f"Bearer {api_key}"
     try:
         request = Request(f"{remote_url}/api/rag/hybrid-search", data=payload, headers=headers, method="POST")
         with urlopen(request, timeout=float(os.getenv("MALAPP_RAG_REMOTE_TIMEOUT", "12"))) as response:

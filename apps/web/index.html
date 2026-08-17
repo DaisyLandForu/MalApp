@@ -62,13 +62,13 @@
               <h3>模型甲</h3>
               <label>接口地址<input id="modelAApiUrl" placeholder="https://model-a.example/v1"></label>
               <label>模型名称<input id="modelAModel" placeholder="Qwen3.6-35B-A3B-FP8"></label>
-              <label>接口密钥<input id="modelAApiKey" type="password" placeholder="EMPTY"></label>
+              <label>接口密钥<input id="modelAApiKey" type="password" placeholder="仅允许环境变量注入" disabled></label>
             </section>
             <section>
               <h3>模型乙</h3>
               <label>接口地址<input id="modelBApiUrl" placeholder="https://model-b.example/v1"></label>
               <label>模型名称<input id="modelBModel" placeholder="malapp-model-b"></label>
-              <label>接口密钥<input id="modelBApiKey" type="password" placeholder="部署时设置的 API 密钥"></label>
+              <label>接口密钥<input id="modelBApiKey" type="password" placeholder="仅允许环境变量注入" disabled></label>
             </section>
           </div>
           <div class="actions"><button class="primary" id="saveServerModelSettingsBtn">保存并检测连接</button></div>

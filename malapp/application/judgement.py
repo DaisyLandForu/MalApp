@@ -1389,6 +1389,8 @@ def judge(raw_sample: dict[str, Any]) -> dict[str, Any]:
         if isinstance(normalized.get("debate_model_config"), dict)
         else {}
     )
+    # build_provider accepts only a non-production rule fixture from this
+    # object; endpoints and credentials remain deployment-only configuration.
     debate_evidence: list[Any] = list(evidence_blocks)
     if xgb_result:
         debate_config["xgb_prior"] = xgb_result

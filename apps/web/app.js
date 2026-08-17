@@ -48,9 +48,20 @@ Object.assign(names, {
 });
 
 async function api(path, options = {}) {
-  const response = await fetch(path, { headers: { "Content-Type": "application/json" }, ...options });
+  const { _authRetried = false, ...requestOptions } = options;
+  const token = sessionStorage.getItem("malappApiKey") || "";
+  const headers = { "Content-Type": "application/json", ...(requestOptions.headers || {}) };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const response = await fetch(path, { ...requestOptions, headers });
+  if (response.status === 401 && !_authRetried) {
+    const entered = window.prompt("请输入 MalApp API Key。密钥仅保存在当前浏览器会话中：");
+    if (entered) {
+      sessionStorage.setItem("malappApiKey", entered.trim());
+      return api(path, { ...requestOptions, _authRetried: true });
+    }
+  }
   const data = await response.json();
-  if (!response.ok) throw new Error(data.error || response.statusText);
+  if (!response.ok) throw new Error(data.error || data.detail || response.statusText);
   return data;
 }
 function esc(v) { return String(v ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]); }
@@ -636,10 +647,12 @@ function renderModelSettings(settings) {
   $("#serverModelsEnabled").checked = Boolean(settings.server_models_enabled);
   $("#modelAApiUrl").value = settings.model_a_api_url || "";
   $("#modelAModel").value = settings.model_a_model || "";
-  $("#modelAApiKey").value = settings.model_a_api_key || "";
+  $("#modelAApiKey").value = "";
+  $("#modelAApiKey").placeholder = settings.model_a_api_key_configured ? "已通过环境变量配置" : "未配置环境变量";
   $("#modelBApiUrl").value = settings.model_b_api_url || "";
   $("#modelBModel").value = settings.model_b_model || "";
-  $("#modelBApiKey").value = settings.model_b_api_key || "";
+  $("#modelBApiKey").value = "";
+  $("#modelBApiKey").placeholder = settings.model_b_api_key_configured ? "已通过环境变量配置" : "未配置环境变量";
   const stateEl = $("#modelState");
   stateEl.className = `model-state ${settings.ready ? "" : "warning"}`;
   stateEl.innerHTML = settings.mode === "server_models"
@@ -666,10 +679,8 @@ async function saveServerModelSettings() {
         server_models_enabled: $("#serverModelsEnabled").checked,
         model_a_api_url: $("#modelAApiUrl").value.trim(),
         model_a_model: $("#modelAModel").value.trim(),
-        model_a_api_key: $("#modelAApiKey").value,
         model_b_api_url: $("#modelBApiUrl").value.trim(),
         model_b_model: $("#modelBModel").value.trim(),
-        model_b_api_key: $("#modelBApiKey").value,
       }),
     });
     renderModelSettings(settings);

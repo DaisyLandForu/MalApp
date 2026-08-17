@@ -15,6 +15,7 @@ jobs:
           cache: pip
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -e ".[dev]"
+      - run: python -m ruff check apps malapp integrations training scripts tests
       - run: python -m compileall -q apps malapp integrations training scripts
       - run: python -m pytest
 

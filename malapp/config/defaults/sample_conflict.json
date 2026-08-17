@@ -1,0 +1,17 @@
+{
+  "sample_id": "demo-conflict-001",
+  "md5": "43924749302BB7A8AA3C601BCE3583BE",
+  "app_name": "Secure Wallet Pro",
+  "package_name": "com.example.securewallet.update",
+  "permissions": [
+    "android.permission.READ_SMS",
+    "android.permission.RECEIVE_SMS",
+    "android.permission.SYSTEM_ALERT_WINDOW"
+  ],
+  "control_url": "https://c2-risk.example.net/checkin",
+  "fraud_family": "wallet-phishing",
+  "fraud_category_big": "金融诈骗",
+  "fake_app": true,
+  "engine_a_score": 20,
+  "engine_b_score": 92
+}

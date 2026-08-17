@@ -1,0 +1,20 @@
+{
+  "initial_weights": {"engine_a": 1.0, "engine_b": 1.0, "engine_c": 1.0},
+  "weight_min": 0.35,
+  "weight_max": 2.25,
+  "evidence_gain": 0.65,
+  "conflict_gain": 0.3,
+  "signature_gain": 0.35,
+  "threat_intel_gain": 0.5,
+  "impersonation_gain": 0.35,
+  "business_gain": 0.3,
+  "static_gain": 0.25,
+  "pipeline_fusion_weight": 0.45,
+  "xgb_fusion_weight": 0.35,
+  "evidence_fusion_weight": 0.2,
+  "llm_fusion_weight": 0.45,
+  "engine_disagreement_decay": 0.22,
+  "missing_evidence_decay": 0.12,
+  "malicious_threshold": 0.85,
+  "suspicious_threshold": 0.6
+}

@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MalApp Judgement Request",
+  "type": "object",
+  "properties": {
+    "sample_id": {"type": "string"},
+    "md5": {"type": "string"},
+    "app_name": {"type": "string"},
+    "package_name": {"type": "string"},
+    "permissions": {"type": "array", "items": {"type": "string"}},
+    "engine_a_score": {"type": "number", "minimum": 0, "maximum": 100},
+    "engine_b_score": {"type": "number", "minimum": 0, "maximum": 100}
+  },
+  "additionalProperties": true
+}

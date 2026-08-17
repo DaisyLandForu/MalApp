@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "malapp-analysis": {
+      "command": "python",
+      "args": ["-m", "integrations.hermes.mcp_server"],
+      "env": {
+        "PYTHONPATH": ".",
+        "PYTHONUTF8": "1"
+      }
+    }
+  }
+}

@@ -1,52 +1,36 @@
-# ===== 虚拟环境与缓存 =====
+# Python
 .venv/
 __pycache__/
-*.pyc
+*.py[cod]
 .pytest_cache/
-.test_tmp/
+.ruff_cache/
+.coverage
+htmlcov/
 
-# ===== 构建与发布产物(PyInstaller) =====
+# Local configuration and logs
+.env
+*.log
+
+# Runtime data and model artifacts
+/data/
+/workspace/
+/training_artifacts/
+/generated_datasets/
+/generated_training_datasets/
+/model_baselines/
+/outputs/
+
+# Raw/private datasets
+/APP-RAG/
+/genuine_new.sql
+*.rar
+
+# Build output
 build/
 dist/
 release/
-.build_*/
-.dist_*/
+*.egg-info/
 
-# ===== 大数据文件(超过 GitHub 100MB 限制,保留在本地) =====
-data/
-training_artifacts/
-generated_datasets/
-generated_training_datasets/
-model_baselines/
-outputs/
-output_app_judgment/
-output_app_white_lite/
-converted_data/
-APP-RAG/
-APP-RAG.rar
-genuine_new.sql
-*.rar
-
-# ===== 临时测试目录 =====
-.desktop_empty_test/
-.desktop_ui_test/
-.excel_limit_test/
-.excel_ui_test/
-.fast_path_test/
-.hermes_flow_test/
-.homogeneity_fix_test/
-.homogeneity_fix_test2/
-.llm_fusion_smoke/
-.enrichment_smoke/
-.converted_import_test/
-
-# ===== 含敏感信息的会话日志(内含服务器凭据,勿入库) =====
-docs/对话记录.md
-
-# ===== 日志与临时文件 =====
-*.log
-.old_batch_input.db
-xelatex_smoke_test.*
-.codex_tree.txt
-*.aux
-*.synctex.gz
+# Docker workspace inputs
+deploy/docker/workspace/*
+!deploy/docker/workspace/.gitkeep

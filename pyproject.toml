@@ -1,0 +1,77 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "malapp-agent"
+version = "2.0.0"
+description = "Evidence-driven multi-agent system for malicious Android application judgement"
+readme = "README.md"
+requires-python = ">=3.11,<3.15"
+license = {text = "Proprietary"}
+authors = [{name = "MalApp contributors"}]
+dependencies = [
+  "numpy>=1.26,<3",
+  "openpyxl>=3.1,<4",
+  "Pillow>=10,<12",
+]
+
+[project.optional-dependencies]
+ml = [
+  "xgboost>=2.1,<4",
+]
+local-llm = [
+  "torch>=2.4,<3",
+  "transformers>=4.46,<5",
+  "accelerate>=1,<2",
+]
+train = [
+  "xgboost>=2.1,<4",
+  "scikit-learn>=1.5,<2",
+  "matplotlib>=3.9,<4",
+  "nbformat>=5.10,<6",
+  "nbclient>=0.10,<1",
+]
+sft = [
+  "torch>=2.4,<3",
+  "transformers>=4.46,<5",
+  "accelerate>=1,<2",
+  "peft>=0.13,<1",
+  "bitsandbytes>=0.44,<1; platform_system == 'Linux'",
+]
+dev = [
+  "pytest>=8.3,<9",
+  "pytest-cov>=5,<7",
+  "ruff>=0.8,<1",
+]
+
+[project.scripts]
+malapp-server = "apps.server.main:main"
+malapp-model-worker = "apps.model_worker.main:main"
+malapp-evaluate = "scripts.evaluation.run_evaluation:main"
+malapp-five-layer-evaluate = "scripts.evaluation.run_five_layer:main"
+malapp-build-rag = "scripts.rag.build_index:main"
+malapp-build-training-corpora = "scripts.training.build_corpora:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["apps*", "integrations*", "malapp*", "scripts*", "training*"]
+
+[tool.setuptools.package-data]
+"apps.web" = ["*.html", "*.css", "*.js"]
+"integrations.hermes" = ["*.json", "*.md", "skills/*/*.md"]
+"malapp.config" = ["defaults/*.json", "defaults/eval/*.json"]
+"training" = ["schemas/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+exclude = ["training_artifacts", "generated_training_datasets"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B"]
+ignore = ["E501"]

@@ -2,6 +2,7 @@
 
 import copy
 import http.client
+import inspect
 import json
 import os
 import re
@@ -14,12 +15,16 @@ from pathlib import Path
 from typing import Any
 
 from malapp.agents.skill_context import build_debate_skill_context, compact_skill_context
+from malapp.governance.artifacts import canonical_json, sha256_text
 from malapp.inference.local_qwen import local_qwen_enabled, normalize_llm_result, parse_model_json, qwen_generate
 from malapp.inference.url_policy import validate_model_endpoint
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = Path(os.getenv("MALAPP_DATA_DIR", str(ROOT / "data"))).expanduser().resolve()
 CALIBRATION_PATH = DATA_DIR / "eval" / "best_params.json"
+DEBATE_PROMPT_ID = "malapp-dual-model-debate"
+DEBATE_PROMPT_VERSION = "1.0.0"
+DEBATE_PROMPT_CREATED_AT = "2026-08-17T00:00:00+00:00"
 
 ROLE_A = {
     "name": "保守复核模型",
@@ -359,6 +364,7 @@ def run_debate(evidence_blocks: list[Any], config: dict[str, Any] | None = None)
             },
         },
         "providers": {name: provider.public_config() for name, provider in providers.items()},
+        "prompt_version": debate_prompt_manifest(),
         "arbiter": arbiter,
         "xgb_prior": config.get("xgb_prior"),
     }
@@ -3758,6 +3764,58 @@ def normalize_list(value: Any) -> list[str]:
     return [str(value)]
 
 
+def debate_prompt_manifest() -> dict[str, Any]:
+    """Return immutable identities for every prompt family used by the debate."""
+    component_functions = {
+        "initial_testimony": (initial_report,),
+        "directed_debate": (debate_turn,),
+        "closing_statement": (closing_report,),
+        "system_contract": (invoke, ModelProvider._http_generate),
+        "schema_repair": (
+            build_json_repair_prompt,
+            build_initial_retry_prompt,
+            build_turn_retry_prompt,
+            build_turn_repair_prompt,
+            build_closing_retry_prompt,
+            build_closing_repair_prompt,
+        ),
+    }
+    components: dict[str, dict[str, Any]] = {}
+    for name, functions in component_functions.items():
+        source = "\n".join(_prompt_function_source(function) for function in functions)
+        components[name] = {
+            "prompt_id": f"{DEBATE_PROMPT_ID}.{name}",
+            "version": DEBATE_PROMPT_VERSION,
+            "sha256": sha256_text(source),
+            "created_at": DEBATE_PROMPT_CREATED_AT,
+        }
+    identity = {
+        "prompt_id": DEBATE_PROMPT_ID,
+        "version": DEBATE_PROMPT_VERSION,
+        "roles": {"model_a": ROLE_A, "model_b": ROLE_B},
+        "components": components,
+    }
+    return {
+        "prompt_id": DEBATE_PROMPT_ID,
+        "version": DEBATE_PROMPT_VERSION,
+        "sha256": sha256_text(canonical_json(identity)),
+        "created_at": DEBATE_PROMPT_CREATED_AT,
+        "components": components,
+    }
+
+
+def _prompt_function_source(function: Any) -> str:
+    try:
+        return inspect.getsource(function)
+    except (OSError, TypeError):
+        code = getattr(function, "__code__", None)
+        constants = list(getattr(code, "co_consts", ()))
+        return canonical_json(
+            {
+                "function": getattr(function, "__qualname__", repr(function)),
+                "constants": [value for value in constants if isinstance(value, (str, int, float, bool))],
+            }
+        )
 def placeholder_model_output(
     parsed: dict[str, Any],
     raw: str,
@@ -3829,5 +3887,3 @@ def verdict_label(score: float, calibration: dict[str, Any] | None = None) -> st
     return {"malicious": "恶意", "suspicious": "可疑", "benign": "良性"}[
         verdict_from_score(score, calibration)
     ]
-
-

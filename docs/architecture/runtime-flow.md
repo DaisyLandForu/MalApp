@@ -28,7 +28,7 @@ FastAPI / Batch / Hermes MCP
        │                     ↓
        └──────────→ A/B/C DYNAMIC WEC
                              ↓
-                  Report + Agent Trace + Reward
+          Report + Agent Trace + Metrics + Provenance + Reward
 ```
 
 八阶段状态机是 Engine C 的内部流水线。清晰 A/B 共识和低风险不确定结果都不进入 Engine C，八阶段全部记录为 `skipped`，也不生成 Score C；后者额外设置人工复核。
@@ -62,7 +62,7 @@ FastAPI / Batch / Hermes MCP
 - `malapp/inference`：模型 Provider 与学习模型 Runtime。
 - `malapp/rag`：文本向量和知识图谱检索。
 - `malapp/governance`：校验 XGBoost Artifact、生成 RAG/Prompt/Runtime 版本快照。
-- `malapp/observability`：Trace、人工反馈和 Reward。
+- `malapp/observability`：统一 Trace、长期指标、Decision Provenance、人工反馈和 Reward。
 
 ## 失败语义
 
@@ -72,7 +72,7 @@ Agent 超时、执行异常、证据不足和模型不可用是不同状态。�
 
 Hermes 不拥有第二套 Agent Pipeline。它只把 MCP 参数转换为 `JudgementRequest`，并调用与 Web、Batch 相同的 `JudgementService`。
 
-每份新报告通过 `runtime_snapshot` 绑定实际代码提交、模型 A/B、XGBoost Artifact、RAG Snapshot、Prompt Bundle、决策参数和四 Agent 版本。Trace 复用同一 Snapshot，详细字段和校验规则见 [Artifact Governance](artifact-governance.md)。
+每份新报告通过 `runtime_snapshot` 绑定实际代码提交、模型 A/B、XGBoost Artifact、RAG Snapshot、Prompt Bundle、决策参数和四 Agent 版本。Trace 复用同一 Snapshot；统一 `run_id`、Stage/Model Trace、长期指标与决策图见 [可观测性与决策溯源](observability.md)，Artifact 校验规则见 [Artifact Governance](artifact-governance.md)。
 
 ## 缓存
 

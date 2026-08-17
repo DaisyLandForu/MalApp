@@ -39,7 +39,7 @@ class DomainAgentIsolationTest(unittest.TestCase):
         runtime = report["preprocess"]["agent_runtime"]
         self.assertEqual(
             report["report_schema_version"],
-            "agent-runtime-pipeline-v6-observability-trace",
+            "agent-runtime-pipeline-v6.1-decision-provenance",
         )
         self.assertEqual(runtime["agents"]["threat_intel"]["status"], "timeout")
         self.assertEqual(runtime["agents"]["threat_intel"]["failure_type"], "timeout")

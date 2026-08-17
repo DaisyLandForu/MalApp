@@ -164,6 +164,7 @@ def build_agent_trace(report: dict[str, Any]) -> dict[str, Any]:
             "model_calls": debate.get("model_calls") or [],
         },
         "decision": decision,
+        "decision_provenance": report.get("decision_provenance") or {},
         "execution": execution,
         "evaluation_metadata": report.get("evaluation_metadata") or {},
         "runtime_snapshot": runtime_snapshot,

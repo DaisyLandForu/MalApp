@@ -36,7 +36,7 @@ from malapp.rag import rag_context_for_sample
 ROOT = PROJECT_ROOT
 DATA_DIR = resolve_data_dir()
 DB_PATH = DATA_DIR / "mvp.db"
-REPORT_SCHEMA_VERSION = "agent-runtime-pipeline-v6-observability-trace"
+REPORT_SCHEMA_VERSION = "agent-runtime-pipeline-v6.1-decision-provenance"
 
 VERDICT_LABELS = {
     "malicious": "恶意",
@@ -77,6 +77,18 @@ def persist_observability_metrics(report: dict[str, Any]) -> None:
         }
     except Exception as exc:
         report.setdefault("execution", {})["metrics_error"] = str(exc)
+
+
+def attach_decision_provenance(report: dict[str, Any]) -> None:
+    from malapp.observability.provenance import build_decision_provenance
+
+    report.pop("decision_provenance", None)
+    report.setdefault("decision", {}).pop("provenance_id", None)
+    report.setdefault("execution", {}).pop("provenance_id", None)
+    provenance = build_decision_provenance(report)
+    report["decision_provenance"] = provenance
+    report.setdefault("decision", {})["provenance_id"] = provenance["provenance_id"]
+    report.setdefault("execution", {})["provenance_id"] = provenance["provenance_id"]
 
 
 def build_xgb_fast_path_debate(xgb_result: dict[str, Any]) -> dict[str, Any]:
@@ -1342,6 +1354,7 @@ def build_engine_c_skipped_report(
         "evaluation_metadata": evaluation_metadata,
     }
     init_db()
+    attach_decision_provenance(report)
     insert_report(report)
     persist_observability_metrics(report)
     try:
@@ -1505,6 +1518,7 @@ def execute_judgement(raw_sample: dict[str, Any], *, entrypoint: str = "internal
             pipeline=pipeline,
         )
         reused.setdefault("execution", {})["entrypoint"] = entrypoint
+        attach_decision_provenance(reused)
         persist_observability_metrics(reused)
         try:
             from malapp.observability.trace import save_agent_trace
@@ -1785,6 +1799,7 @@ def execute_judgement(raw_sample: dict[str, Any], *, entrypoint: str = "internal
     except Exception as exc:
         pipeline.fail("PERSIST", exc)
         raise
+    attach_decision_provenance(report)
     persist_observability_metrics(report)
     try:
         from malapp.observability.trace import save_agent_trace

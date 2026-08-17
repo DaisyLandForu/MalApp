@@ -153,6 +153,7 @@ python -m compileall -q apps malapp integrations training scripts
 - [运行架构](docs/architecture/runtime-flow.md)
 - [业务语义边界与 Engine C/WEC](docs/architecture/business-semantic-alignment.md)
 - [Artifact Governance](docs/architecture/artifact-governance.md)
+- [可观测性与决策溯源](docs/architecture/observability.md)
 - [Docker 部署](docs/deployment.md)
 - [数据接入](docs/data-ingestion.md)
 - [RAG](docs/rag/guide.md)

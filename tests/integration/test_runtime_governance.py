@@ -49,7 +49,7 @@ def test_judgement_and_trace_bind_the_same_runtime_snapshot() -> None:
         )
 
     snapshot = report["runtime_snapshot"]
-    assert report["report_schema_version"] == "agent-runtime-pipeline-v6-observability-trace"
+    assert report["report_schema_version"] == "agent-runtime-pipeline-v6.1-decision-provenance"
     assert report["rag_snapshot_id"] == rag_snapshot["snapshot_id"]
     assert report["execution"]["runtime_snapshot_id"] == snapshot["snapshot_id"]
     assert snapshot["rag_snapshot"]["snapshot_id"] == rag_snapshot["snapshot_id"]
@@ -63,6 +63,11 @@ def test_judgement_and_trace_bind_the_same_runtime_snapshot() -> None:
     assert report["preprocess"]["agent_runtime"]["run_id"] == report["run_id"]
     assert report["debate"]["run_id"] == report["run_id"]
     assert report["execution"]["pipeline"]["run_id"] == report["run_id"]
+    provenance = report["decision_provenance"]
+    assert provenance["run_id"] == report["run_id"]
+    assert provenance["provenance_id"] == report["decision"]["provenance_id"]
+    assert provenance["final_node_id"] == "final_label"
+    assert provenance["reconstruction_order"][-1] == "final_label"
     assert report["execution"]["metrics_record"] == {
         "run_id": report["run_id"],
         "agent_count": 4,
@@ -92,4 +97,5 @@ def test_judgement_and_trace_bind_the_same_runtime_snapshot() -> None:
         for stage in report["execution"]["pipeline"]["stages"]
     )
     assert trace["runtime_snapshot"]["snapshot_id"] == snapshot["snapshot_id"]
+    assert trace["decision_provenance"]["provenance_id"] == provenance["provenance_id"]
     assert get_trace(run_id=report["run_id"])["trace_id"] == trace["trace_id"]

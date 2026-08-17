@@ -47,7 +47,7 @@ def test_judgement_and_trace_bind_the_same_runtime_snapshot() -> None:
         )
 
     snapshot = report["runtime_snapshot"]
-    assert report["report_schema_version"] == "agent-runtime-pipeline-v5-artifact-governance"
+    assert report["report_schema_version"] == "agent-runtime-pipeline-v5.1-business-semantic-alignment"
     assert report["rag_snapshot_id"] == rag_snapshot["snapshot_id"]
     assert report["execution"]["runtime_snapshot_id"] == snapshot["snapshot_id"]
     assert snapshot["rag_snapshot"]["snapshot_id"] == rag_snapshot["snapshot_id"]

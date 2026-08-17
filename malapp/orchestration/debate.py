@@ -10,10 +10,10 @@ import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from malapp.agents.evidence_contract import build_evidence_envelope, validate_evidence_references
 from malapp.agents.skill_context import build_debate_skill_context, compact_skill_context
 from malapp.governance.artifacts import canonical_json, sha256_text
 from malapp.inference.local_qwen import local_qwen_enabled, normalize_llm_result, parse_model_json, qwen_generate
@@ -75,13 +75,17 @@ def run_debate(evidence_blocks: list[Any], config: dict[str, Any] | None = None)
     # 双模型辩论入口：接收四智能体 EvidenceBlock，让模型甲/模型乙完成初判、质疑、反驳和终审。
     # 这里负责压缩证据、并行调用模型、校验 JSON 输出，并把失败原因返回给上层流水线。
     config = config or {}
-    evidence = [
-        compact_evidence_for_llm(asdict(item) if hasattr(item, "__dataclass_fields__") else dict(item))
-        for item in evidence_blocks
-    ]
+    configured_envelope = config.get("canonical_evidence_envelope")
+    if isinstance(configured_envelope, dict) and configured_envelope.get("evidence_snapshot_id"):
+        envelope = dict(configured_envelope)
+    else:
+        envelope = build_evidence_envelope(
+            str(config.get("sample_id") or "unknown"), evidence_blocks
+        ).to_dict()
+    evidence = [compact_evidence_for_llm(dict(item)) for item in envelope["evidence_blocks"]]
     evidence = attach_llm_agent_reviews(evidence, config.get("llm_agent_reviews"))
-    initial_evidence_json = json.dumps(evidence_for_phase(evidence, "initial"), ensure_ascii=False, separators=(",", ":"))
-    initial_evidence_json_b = json.dumps(evidence_for_model_phase(evidence, "initial", "model_b"), ensure_ascii=False, separators=(",", ":"))
+    initial_evidence_json = canonical_json(envelope)
+    initial_evidence_json_b = initial_evidence_json
     turn_evidence_json = json.dumps(evidence_for_phase(evidence, "turn"), ensure_ascii=False, separators=(",", ":"))
     turn_evidence_json_b = json.dumps(evidence_for_model_phase(evidence, "turn", "model_b"), ensure_ascii=False, separators=(",", ":"))
     rebuttal_evidence_json = json.dumps(evidence_for_phase(evidence, "rebuttal"), ensure_ascii=False, separators=(",", ":"))
@@ -92,6 +96,18 @@ def run_debate(evidence_blocks: list[Any], config: dict[str, Any] | None = None)
         "model_a": build_provider("model_a", config),
         "model_b": build_provider("model_b", config),
     }
+    provider_identities = {name: provider.identity() for name, provider in providers.items()}
+    same_model = provider_identities["model_a"] == provider_identities["model_b"]
+    profile = os.getenv("MALAPP_PROFILE", "demo").strip().lower()
+    if profile == "production" and same_model:
+        raise RuntimeError("production_dual_model_identity_conflict: model A and model B must differ")
+    debate_conformance = (
+        "single-model-simulation"
+        if same_model
+        else "heterogeneous-production"
+        if profile == "production"
+        else "heterogeneous-development"
+    )
     max_rounds = max(1, min(int(config.get("max_attack_rounds", 1)), 6))
     min_rounds = max(1, min(int(config.get("min_attack_rounds", 1)), max_rounds))
     score_threshold = max(0.0, min(float(config.get("convergence_score_threshold", 0.06)), 0.5))
@@ -156,6 +172,8 @@ def run_debate(evidence_blocks: list[Any], config: dict[str, Any] | None = None)
         )
     initial_a = dict(current_a)
     initial_b = dict(current_b)
+    validate_evidence_references(initial_a, envelope["evidence_ids"])
+    validate_evidence_references(initial_b, envelope["evidence_ids"])
     initial_stage = stage_record("initial_testimony", 0, [current_a, current_b])
     append_stage(stages, memory, token_usage, initial_stage)
 
@@ -364,6 +382,15 @@ def run_debate(evidence_blocks: list[Any], config: dict[str, Any] | None = None)
             },
         },
         "providers": {name: provider.public_config() for name, provider in providers.items()},
+        "debate_conformance": debate_conformance,
+        "evidence_snapshot_id": envelope["evidence_snapshot_id"],
+        "evidence_schema_version": envelope["schema_version"],
+        "initial_evidence": {
+            "model_a_snapshot_id": envelope["evidence_snapshot_id"],
+            "model_b_snapshot_id": envelope["evidence_snapshot_id"],
+            "evidence_ids": list(envelope["evidence_ids"]),
+            "sha256": envelope["sha256"],
+        },
         "prompt_version": debate_prompt_manifest(),
         "arbiter": arbiter,
         "xgb_prior": config.get("xgb_prior"),
@@ -379,6 +406,8 @@ def safe_model_result(
     try:
         return future.result()
     except Exception as exc:
+        if isinstance(exc, EvidenceContextOverflow) or "evidence_context_overflow" in str(exc):
+            raise EvidenceContextOverflow(str(exc)) from exc
         raise RuntimeError(model_unavailable_failure_message(role, phase, exc)) from exc
 
 
@@ -1192,6 +1221,10 @@ def strip_model_thinking_text(value: Any) -> str:
     return text.strip()
 
 
+class EvidenceContextOverflow(RuntimeError):
+    """The complete initial EvidenceEnvelope cannot fit the model context."""
+
+
 class ModelProvider:
     def __init__(self, name: str, backend: str, model: str, api_url: str = "", api_key: str = ""):
         self.name = name
@@ -1200,15 +1233,28 @@ class ModelProvider:
         self.api_url = validate_model_endpoint(api_url) if backend == "openai_compatible" else ""
         self.api_key = api_key
 
-    def generate(self, system_prompt: str, user_prompt: str, max_tokens: int = 160) -> dict[str, Any]:
+    def generate(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        max_tokens: int = 160,
+        *,
+        preserve_full_prompt: bool = False,
+    ) -> dict[str, Any]:
         started = time.perf_counter()
         usage = {}
         context_tokens = self.context_token_limit()
-        system_prompt, user_prompt = fit_prompt_for_context(
-            system_prompt,
-            user_prompt,
-            context_tokens=context_tokens,
-        )
+        if preserve_full_prompt:
+            if estimate_tokens(system_prompt + user_prompt) + 64 > context_tokens:
+                raise EvidenceContextOverflow(
+                    f"evidence_context_overflow: canonical evidence requires more than {context_tokens} tokens"
+                )
+        else:
+            system_prompt, user_prompt = fit_prompt_for_context(
+                system_prompt,
+                user_prompt,
+                context_tokens=context_tokens,
+            )
         max_tokens = bounded_completion_tokens(
             system_prompt,
             user_prompt,
@@ -1404,7 +1450,15 @@ class ModelProvider:
             raise RuntimeError("; ".join(errors[-5:]) or last_error) from exc
 
     def public_config(self) -> dict[str, Any]:
-        return {"backend": self.backend, "model": self.model, "api_url": self.api_url}
+        return {
+            "backend": self.backend,
+            "model": self.model,
+            "api_url": self.api_url,
+            "identity": self.identity(),
+        }
+
+    def identity(self) -> str:
+        return f"{self.backend}:{self.model}"
 
 
 def build_provider(name: str, config: dict[str, Any]) -> ModelProvider:
@@ -1720,6 +1774,7 @@ def invoke(
             system_prompt,
             prompt,
             max_tokens=model_max_tokens_for_phase(phase, provider.name),
+            preserve_full_prompt=phase == "initial_testimony",
         )
         parsed = parse_model_json(generated["raw_text"])
         if phase == "initial_testimony":

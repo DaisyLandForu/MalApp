@@ -18,7 +18,6 @@ from malapp.agents.domain import (
     ThreatIntelAgent,
 )
 from malapp.agents.evidence_layers import (
-    build_llm_explanation_layer,
     build_raw_evidence_layer,
     build_structured_evidence_layer,
 )
@@ -36,7 +35,7 @@ from malapp.rag import rag_context_for_sample
 ROOT = PROJECT_ROOT
 DATA_DIR = resolve_data_dir()
 DB_PATH = DATA_DIR / "mvp.db"
-REPORT_SCHEMA_VERSION = "agent-runtime-pipeline-v5-artifact-governance"
+REPORT_SCHEMA_VERSION = "agent-runtime-pipeline-v5.1-business-semantic-alignment"
 
 VERDICT_LABELS = {
     "malicious": "恶意",
@@ -252,8 +251,12 @@ def normalize_sample(raw: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
         seed = normalized.get("md5") or normalized.get("sha256") or json.dumps(raw, sort_keys=True, ensure_ascii=False)
         normalized["sample_id"] = hashlib.sha1(str(seed).encode("utf-8")).hexdigest()[:12]
 
-    normalized.setdefault("engine_a_score", 50)
-    normalized.setdefault("engine_b_score", 50)
+    from malapp.application.engine_c_admission import ensure_ab_inputs
+
+    normalized["ab_input_mode"] = ensure_ab_inputs(
+        normalized,
+        production=os.getenv("MALAPP_PROFILE", "demo").strip().lower() == "production",
+    )
     normalized.setdefault("engine_a_label", score_to_label(normalized["engine_a_score"]))
     normalized.setdefault("engine_b_label", score_to_label(normalized["engine_b_score"]))
     from malapp.data_import.preprocess import derive_engine_fields
@@ -1124,12 +1127,15 @@ def run_agents(
     sample: dict[str, Any],
     iocs: list[dict[str, Any]],
 ) -> tuple[list[EvidenceBlock], dict[str, Any], list[AgentResult]]:
+    from malapp.inference.expert import ExpertModelProvider
+
+    expert_provider = ExpertModelProvider()
     registry = AgentRegistry(
         [
-            StaticAnalysisAgent(static_analysis_agent),
-            ThreatIntelAgent(threat_intel_agent),
-            ImpersonationAgent(impersonation_agent),
-            BusinessLabelAgent(business_label_agent),
+            StaticAnalysisAgent(static_analysis_agent, expert_provider),
+            ThreatIntelAgent(threat_intel_agent, expert_provider),
+            ImpersonationAgent(impersonation_agent, expert_provider),
+            BusinessLabelAgent(business_label_agent, expert_provider),
         ]
     )
     results, runtime_report = AgentRuntime(registry).execute(
@@ -1143,6 +1149,7 @@ def run_agents(
     )
     blocks = [block for result in results for block in result.evidence]
     runtime_report["results"] = [result.to_dict() for result in results]
+    runtime_report["expert_runtime"] = expert_provider.manifest()
     return blocks, runtime_report, results
 
 
@@ -1209,6 +1216,80 @@ def mark_history_reused(report: dict[str, Any], source: str) -> dict[str, Any]:
     return reused
 
 
+def build_clear_consensus_report(
+    sample: dict[str, Any],
+    *,
+    unmapped: list[str],
+    evaluation_metadata: dict[str, Any],
+    evaluation_config: dict[str, Any],
+    entrypoint: str,
+    pipeline: PipelineStateMachine,
+    admission: Any,
+    decision_params: dict[str, Any],
+) -> dict[str, Any]:
+    """Build the direct A/B result when the original Engine C gate stays closed."""
+    from malapp.application.engine_c_admission import direct_ab_consensus_decision
+    from malapp.data_import.preprocess import set_cached_report
+    from malapp.governance.runtime import save_runtime_snapshot
+    from malapp.inference.settings import model_cache_signature
+
+    decision = direct_ab_consensus_decision(sample, admission, decision_params)
+    runtime_snapshot = save_runtime_snapshot(
+        decision_params=decision_params,
+        data_dir=DATA_DIR,
+        admission=admission.to_dict(),
+        evidence_envelope=None,
+        expert_runtime=None,
+        debate_conformance="not_executed",
+        wec_policy=decision["fusion"],
+    )
+    report = {
+        "report_id": hashlib.sha1(
+            json.dumps(sample, sort_keys=True, ensure_ascii=False).encode("utf-8")
+        ).hexdigest()[:16],
+        "report_schema_version": REPORT_SCHEMA_VERSION,
+        "created_at": utc_now(),
+        "runtime_snapshot": runtime_snapshot,
+        "sample": sample,
+        "engine_c": {**admission.to_dict(), "executed": False, "score_c": None},
+        "preprocess": {"unmapped_fields": unmapped, "agent_runtime": {"status": "skipped", "agents": {}}},
+        "evidence_blocks": [],
+        "evidence_layers": {
+            "raw_evidence": {},
+            "structured_evidence_blocks": [],
+            "canonical_evidence_envelope": None,
+            "llm_explanation": {"status": "skipped", "agent_explanations": []},
+            "rag_context": {"enabled": False, "ready": False, "items": [], "skip_reason": "engine_c_not_admitted"},
+        },
+        "debate": {
+            "execution_mode": "skipped",
+            "skip_reason": "engine_c_not_admitted",
+            "debate_conformance": "not_executed",
+            "arbiter": None,
+            "stages": [],
+        },
+        "decision": decision,
+        "degradation": {"status": "healthy", "reasons": []},
+        "next_steps": [],
+        "execution": {
+            "orchestrator": "agent_runtime",
+            "entrypoint": entrypoint,
+            "service_pipeline": "malapp.agent-runtime.v2",
+            "history_reused": False,
+            "model_cache_signature": model_cache_signature(),
+            "runtime_snapshot_id": runtime_snapshot["snapshot_id"],
+            "evaluation_config": evaluation_config,
+            "evaluation_variant": os.getenv("MALAPP_EVAL_VARIANT", "production"),
+            "pipeline": pipeline.snapshot(),
+        },
+        "evaluation_metadata": evaluation_metadata,
+    }
+    init_db()
+    insert_report(report)
+    set_cached_report(sample, report)
+    return report
+
+
 def execute_judgement(raw_sample: dict[str, Any], *, entrypoint: str = "internal") -> dict[str, Any]:
     """Run the one authoritative judgement pipeline for every transport."""
     from malapp.data_import.preprocess import (
@@ -1220,7 +1301,6 @@ def execute_judgement(raw_sample: dict[str, Any], *, entrypoint: str = "internal
     )
 
     pipeline = PipelineStateMachine()
-    pipeline.start("NORMALIZE")
     try:
         raw_sample = dict(raw_sample)
         evaluation_config = (
@@ -1258,9 +1338,31 @@ def execute_judgement(raw_sample: dict[str, Any], *, entrypoint: str = "internal
             raw_sample.pop(key, None)
         raw_sample.pop("filepath", None)
         normalized, unmapped = normalize_sample(raw_sample)
+        from malapp.application.engine_c_admission import EngineCAdmissionPolicy
+        from malapp.orchestration.decision import load_decision_params, merge_params
+
+        decision_params = load_decision_params()
+        if isinstance(normalized.get("decision_params"), dict):
+            decision_params = merge_params(decision_params, normalized["decision_params"])
+        admission = EngineCAdmissionPolicy(decision_params).decide(normalized)
+        if not admission.execute:
+            for stage in pipeline.snapshot()["stage_order"]:
+                pipeline.skip(stage, "engine_c_not_admitted", {"reason": admission.reason.value})
+            return build_clear_consensus_report(
+                normalized,
+                unmapped=unmapped,
+                evaluation_metadata=evaluation_metadata,
+                evaluation_config=evaluation_config,
+                entrypoint=entrypoint,
+                pipeline=pipeline,
+                admission=admission,
+                decision_params=decision_params,
+            )
+        pipeline.start("NORMALIZE")
         pipeline.complete("NORMALIZE", {"sample_id": normalized["sample_id"]})
     except Exception as exc:
-        pipeline.fail("NORMALIZE", exc)
+        if pipeline.snapshot()["by_name"]["NORMALIZE"]["status"] == "started":
+            pipeline.fail("NORMALIZE", exc)
         raise
 
     pipeline.start("STATIC_EXTRACTION")
@@ -1331,6 +1433,7 @@ def execute_judgement(raw_sample: dict[str, Any], *, entrypoint: str = "internal
             key: value
             for result in agent_results
             for key, value in result.artifacts.items()
+            if key != "expert_review"
         }
         threat_intelligence = artifacts.get("threat_intelligence", {})
         impersonation_analysis = artifacts.get("impersonation_analysis", {})
@@ -1402,6 +1505,11 @@ def execute_judgement(raw_sample: dict[str, Any], *, entrypoint: str = "internal
         evidence_blocks = apply_xgb_agent_scores(evidence_blocks, xgb_result)
     evidence_blocks = add_evidence_conflict_markers(evidence_blocks)
     structured_evidence_layer = build_structured_evidence_layer(evidence_blocks)
+    from malapp.agents.evidence_contract import build_evidence_envelope
+
+    evidence_envelope = build_evidence_envelope(
+        normalized["sample_id"], evidence_blocks, agent_results
+    ).to_dict()
 
     debate_config = (
         dict(normalized.get("debate_model_config"))
@@ -1414,11 +1522,11 @@ def execute_judgement(raw_sample: dict[str, Any], *, entrypoint: str = "internal
     if xgb_result:
         debate_config["xgb_prior"] = xgb_result
     debate_config["rag_context"] = rag_context
-    llm_explanation = build_llm_explanation_layer(
-        evidence_blocks,
-        debate_config,
-        raw_evidence_layer,
-    )
+    debate_config["sample_id"] = normalized["sample_id"]
+    debate_config["canonical_evidence_envelope"] = evidence_envelope
+    from malapp.inference.expert import explanation_layer
+
+    llm_explanation = explanation_layer(agent_results, agent_runtime["expert_runtime"])
     if llm_explanation.get("agent_explanations"):
         debate_config["llm_agent_reviews"] = llm_explanation.get("agent_explanations")
     if local_qwen_enabled():
@@ -1480,6 +1588,11 @@ def execute_judgement(raw_sample: dict[str, Any], *, entrypoint: str = "internal
         rag_context=rag_context,
         decision_params=decision.get("parameters"),
         data_dir=DATA_DIR,
+        admission=admission.to_dict(),
+        evidence_envelope=evidence_envelope,
+        expert_runtime=agent_runtime.get("expert_runtime"),
+        debate_conformance=debate_result.get("debate_conformance"),
+        wec_policy=decision.get("wec"),
     )
     report = {
         "report_id": hashlib.sha1(json.dumps(normalized, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()[:16],
@@ -1488,6 +1601,7 @@ def execute_judgement(raw_sample: dict[str, Any], *, entrypoint: str = "internal
         "rag_snapshot_id": rag_context.get("rag_snapshot_id"),
         "runtime_snapshot": runtime_snapshot,
         "sample": normalized,
+        "engine_c": {**admission.to_dict(), "executed": True, "score_c": decision["engine_scores"]["engine_c"]},
         "preprocess": {
             "unmapped_fields": unmapped,
             "iocs": iocs,
@@ -1505,6 +1619,7 @@ def execute_judgement(raw_sample: dict[str, Any], *, entrypoint: str = "internal
         "evidence_layers": {
             "raw_evidence": raw_evidence_layer,
             "structured_evidence_blocks": structured_evidence_layer,
+            "canonical_evidence_envelope": evidence_envelope,
             "llm_explanation": llm_explanation,
             "rag_context": rag_context,
         },

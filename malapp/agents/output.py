@@ -35,6 +35,8 @@ def validate_and_repair_evidence_blocks(blocks: list[Any]) -> tuple[list[Any], d
                 "status": "ok | insufficient_evidence | degraded",
                 "rule_score": "observable-evidence malicious probability",
                 "ml_prior": "optional learned prior kept separate from evidence",
+                "evidence_id": "stable identifier assigned by CanonicalEvidenceEnvelope",
+                "expert_review": "shared expert-model explanation constrained to this evidence",
             },
         },
         "valid": all(item["valid"] for item in items),

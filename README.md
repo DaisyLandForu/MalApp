@@ -11,6 +11,9 @@ Web / JSON API / Hermes MCP
        JudgementService
              │
              ▼
+     A/B Validation + Engine C Gate
+             │
+             ▼
         Agent Runtime
        ┌─────┼─────┬──────────┐
        ▼     ▼     ▼          ▼
@@ -21,7 +24,7 @@ Web / JSON API / Hermes MCP
              ▼
        Dual-model Debate
              ▼
-      Decision / Trace / Review
+       A/B/C WEC + Trace / Review
 ```
 
 主目录：
@@ -148,6 +151,7 @@ python -m compileall -q apps malapp integrations training scripts
 ## Documentation
 
 - [运行架构](docs/architecture/runtime-flow.md)
+- [业务语义边界与 Engine C/WEC](docs/architecture/business-semantic-alignment.md)
 - [Artifact Governance](docs/architecture/artifact-governance.md)
 - [Docker 部署](docs/deployment.md)
 - [数据接入](docs/data-ingestion.md)

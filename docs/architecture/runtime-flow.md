@@ -9,6 +9,33 @@ FastAPI / Batch / Hermes MCP
              ↓
        JudgementService
              ↓
+ A/B INPUT VALIDATION → ENGINE C ADMISSION
+       ↙ CLEAR          ↘ RUN ENGINE C
+  A/B CONSENSUS       NORMALIZE → STATIC_EXTRACTION
+       │                     ↓
+       │               AGENT_EXECUTION
+       │           （统一 Runtime 并行/重试/超时，
+       │             确定性工具 + 共享专家模型）
+       │                     ↓
+       │          RAG_RETRIEVAL → XGB_INFERENCE
+       │                     ↓
+       │                   DEBATE
+       │            （首轮共享完整 Evidence）
+       │                     ↓
+       │              FINAL_DECISION_C
+       │                     ↓
+       │                   PERSIST
+       │                     ↓
+       └──────────→ A/B/C DYNAMIC WEC
+                             ↓
+                  Report + Agent Trace + Reward
+```
+
+八阶段状态机是 Engine C 的内部流水线。清晰 A/B 共识不进入 Engine C，八阶段全部记录为 `skipped`，也不生成 Score C。
+
+旧版线性图如下逻辑已由上图取代：
+
+```text
  NORMALIZE → STATIC_EXTRACTION
              ↓
        AGENT_EXECUTION

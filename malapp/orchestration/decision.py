@@ -24,7 +24,11 @@ DEFAULT_PARAMS = {
     "static_gain": 0.25,
     "pipeline_fusion_weight": 0.45,
     "xgb_fusion_weight": 0.35,
+    "score_c_xgb_calibration_weight": 0.35,
     "evidence_fusion_weight": 0.20,
+    "admission_clear_consensus_confidence": 0.8,
+    "admission_high_risk_threshold": 0.7,
+    "admission_ambiguity_score_gap": 0.15,
     # Kept for compatibility with existing decision_params.json files.  The
     # arbiter is already part of pipeline_fusion_weight and must not be counted
     # a second time.
@@ -48,10 +52,29 @@ def collaborative_decision(
         params = merge_params(params, runtime_params)
 
     blocks = [asdict(item) if hasattr(item, "__dataclass_fields__") else dict(item) for item in evidence_blocks]
+    missing = [name for name in ("engine_a_score", "engine_b_score") if sample.get(name) in (None, "")]
+    if missing:
+        raise ValueError("missing upstream engine scores: " + ", ".join(missing))
+    score_c_raw = normalize_engine_score(debate_report.get("arbiter", {}).get("score", 0.5))
+    if xgb_result is None:
+        try:
+            from malapp.inference.xgboost import predict as predict_xgb
+
+            xgb_result = predict_xgb(sample)
+        except Exception:
+            xgb_result = None
+    calibration_weight = 0.0
+    score_c = score_c_raw
+    if xgb_result is not None:
+        calibration_weight = clamp(float(params.get("score_c_xgb_calibration_weight", 0.35)))
+        score_c = clamp(
+            score_c_raw * (1.0 - calibration_weight)
+            + clamp(float(xgb_result["probability"])) * calibration_weight
+        )
     engine_scores = {
-        "engine_a": normalize_engine_score(sample.get("engine_a_score", 50)),
-        "engine_b": normalize_engine_score(sample.get("engine_b_score", 50)),
-        "engine_c": normalize_engine_score(debate_report.get("arbiter", {}).get("score", 0.5)),
+        "engine_a": normalize_engine_score(sample["engine_a_score"]),
+        "engine_b": normalize_engine_score(sample["engine_b_score"]),
+        "engine_c": score_c,
     }
     key_evidence = extract_key_evidence(sample, debate_report, blocks)
     weights, adjustments = allocate_dynamic_weights(engine_scores, key_evidence, blocks, params)
@@ -60,68 +83,29 @@ def collaborative_decision(
         for name in ("engine_a", "engine_b", "engine_c")
     }
     weight_sum = sum(weights.values()) or 1.0
-    raw_score = clamp(sum(weighted_terms.values()) / weight_sum)
+    raw_score = round(
+        max(0.0, min(sum(weighted_terms.values()) / weight_sum, 1.0)),
+        6,
+    )
     evidence_consensus = evidence_consensus_score(blocks)
-    consensus_bonus = evidence_consensus_adjustment(blocks)
-    final_score = clamp(raw_score + consensus_bonus)
+    consensus_bonus = 0.0
+    final_score = raw_score
     verdict = verdict_from_score(final_score, params)
-    if xgb_result is None:
-        try:
-            from malapp.inference.xgboost import predict as predict_xgb
-
-            xgb_result = predict_xgb(sample)
-        except Exception:
-            xgb_result = None
     llm_confidence = debate_confidence(debate_report)
     evidence_probability, evidence_confidence = evidence_probability_score(blocks)
     fusion = {
-        "mode": "evidence_only",
-        "xgb_probability": None,
-        "llm_probability": engine_scores["engine_c"],
+        "mode": "engine_c_internal_calibration_then_abc_wec",
+        "xgb_probability": clamp(float(xgb_result["probability"])) if xgb_result is not None else None,
+        "llm_probability": score_c_raw,
         "llm_confidence": llm_confidence,
-        "xgb_weight": 0.0,
-        "pipeline_probability": final_score,
-        "pipeline_weight": 1.0,
+        "xgb_weight": calibration_weight,
+        "pipeline_probability": score_c,
+        "pipeline_weight": 1.0 - calibration_weight,
         "evidence_probability": evidence_probability,
         "evidence_confidence": evidence_confidence,
         "evidence_weight": 0.0,
+        "formula": "Score C = Debate*(1-calibration_weight) + XGBoost*calibration_weight",
     }
-    if xgb_result is not None:
-        xgb_probability = clamp(float(xgb_result["probability"]))
-        llm_probability = engine_scores["engine_c"]
-        pipeline_probability = final_score
-        xgb_weight = float(params["xgb_fusion_weight"])
-        pipeline_weight = float(params["pipeline_fusion_weight"])
-        evidence_weight = (
-            float(params["evidence_fusion_weight"]) * evidence_confidence
-            if evidence_probability is not None
-            else 0.0
-        )
-        total_fusion_weight = xgb_weight + pipeline_weight + evidence_weight or 1.0
-        final_score = clamp(
-            (
-                xgb_probability * xgb_weight
-                + pipeline_probability * pipeline_weight
-                + (evidence_probability or 0.0) * evidence_weight
-            )
-            / total_fusion_weight
-        )
-        fusion = {
-            "mode": "calibrated_xgboost_pipeline_evidence_fusion",
-            "xgb_probability": xgb_probability,
-            "llm_probability": llm_probability,
-            "llm_confidence": llm_confidence,
-            "pipeline_probability": pipeline_probability,
-            "evidence_probability": evidence_probability,
-            "evidence_confidence": evidence_confidence,
-            "xgb_weight": round(xgb_weight / total_fusion_weight, 4),
-            "pipeline_weight": round(pipeline_weight / total_fusion_weight, 4),
-            "evidence_weight": round(evidence_weight / total_fusion_weight, 4),
-            "formula": (
-                "(XGBoost概率×XGB权重 + 完整动态融合概率×流水线权重 + "
-                "可信Agent事实概率×证据权重) / 权重和"
-            ),
-        }
     verdict, policy = guarded_verdict(
         final_score,
         params=params,
@@ -157,11 +141,19 @@ def collaborative_decision(
         "consensus": {
             "evidence_consensus_score": evidence_consensus,
             "engine_score_spread": round(max(engine_scores.values()) - min(engine_scores.values()), 4),
-            "formula": "(A*Weight_A + B*Weight_B + C*Weight_C) / sum(weights) + consensus_bonus",
+            "formula": "(A*Weight_A + B*Weight_B + C*Weight_C) / sum(weights)",
         },
         "parameters": params,
         "xgb": xgb_result,
         "fusion": fusion,
+        "wec": {
+            "policy_id": "dynamic-three-engine-wec",
+            "version": "1.0.0",
+            "formula": "(A*Wa+B*Wb+C*Wc)/(Wa+Wb+Wc)",
+            "score_c_source": "engine_c_pipeline",
+            "score_c_raw": score_c_raw,
+            "score_c_calibrated": score_c,
+        },
         "review_required": verdict == "suspicious" or bool(policy["review_reasons"]),
         "review_reasons": policy["review_reasons"],
         "decision_trace": build_decision_trace(engine_scores, weights, key_evidence, adjustments, final_score, verdict),
@@ -176,7 +168,7 @@ def extract_key_evidence(
     evidence = []
     for block in blocks:
         status = str(block.get("status") or "ok").strip().lower()
-        score = clamp(float(block.get("rule_score", block.get("score", 0))))
+        score = clamp(float(block.get("rule_score") if block.get("rule_score") is not None else block.get("score", 0)))
         confidence = clamp(float(block.get("confidence", score)))
         usable = status not in {"insufficient_evidence", "degraded"}
         strength = clamp(score * 0.65 + confidence * 0.35) if usable else 0.0
@@ -313,7 +305,7 @@ def allocate_dynamic_weights(
 
 def evidence_consensus_score(blocks: list[dict[str, Any]]) -> float:
     scores = [
-        clamp(float(item.get("rule_score", item.get("score", 0))))
+        clamp(float(item.get("rule_score") if item.get("rule_score") is not None else item.get("score", 0)))
         for item in blocks
         if str(item.get("status") or "ok").lower()
         not in {"insufficient_evidence", "degraded"}
@@ -327,7 +319,7 @@ def evidence_consensus_score(blocks: list[dict[str, Any]]) -> float:
 def evidence_consensus_adjustment(blocks: list[dict[str, Any]]) -> float:
     """Return a signed adjustment; agreement alone must not always add risk."""
     scores = [
-        clamp(float(item.get("rule_score", item.get("score", 0))))
+        clamp(float(item.get("rule_score") if item.get("rule_score") is not None else item.get("score", 0)))
         for item in blocks
         if str(item.get("status") or "ok").lower()
         not in {"insufficient_evidence", "degraded"}
@@ -350,7 +342,7 @@ def evidence_probability_score(
             "degraded",
         }:
             continue
-        score = clamp(float(block.get("rule_score", block.get("score", 0))))
+        score = clamp(float(block.get("rule_score") if block.get("rule_score") is not None else block.get("score", 0)))
         confidence = clamp(float(block.get("confidence", 0)))
         evidence_count = len(block.get("evidence_items") or block.get("evidence") or [])
         missing_count = len(block.get("missing_fields") or [])

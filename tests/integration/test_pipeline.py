@@ -220,7 +220,7 @@ class PipelineTest(unittest.TestCase):
         self.assertTrue(report["decision"]["review_required"])
         self.assertEqual(
             report["decision"]["fusion"]["mode"],
-            "calibrated_xgboost_pipeline_evidence_fusion",
+            "engine_c_internal_calibration_then_abc_wec",
         )
         self.assertIn("pipeline_weight", report["decision"]["fusion"])
         self.assertIn("component_thresholds", report["decision"]["fusion"])

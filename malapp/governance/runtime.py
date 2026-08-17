@@ -18,8 +18,8 @@ from malapp.governance.artifacts import (
     xgboost_manifest_summary,
 )
 
-RUNTIME_SNAPSHOT_VERSION = 1
-DECISION_PARAMS_VERSION = "decision-params-v1"
+RUNTIME_SNAPSHOT_VERSION = 2
+DECISION_PARAMS_VERSION = "decision-params-v2-business-alignment"
 AGENT_VERSION = "1.0.0"
 
 
@@ -30,6 +30,11 @@ def capture_runtime_snapshot(
     rag_context: dict[str, Any] | None = None,
     decision_params: dict[str, Any] | None = None,
     data_dir: Path | None = None,
+    admission: dict[str, Any] | None = None,
+    evidence_envelope: dict[str, Any] | None = None,
+    expert_runtime: dict[str, Any] | None = None,
+    debate_conformance: str | None = None,
+    wec_policy: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     code = code_identity()
     commit = resolve_git_commit(PROJECT_ROOT)
@@ -48,6 +53,11 @@ def capture_runtime_snapshot(
         "prompt_version": active_prompt_version(debate_result),
         "decision_params_version": decision_params_manifest(decision_params),
         "agent_versions": agent_versions(),
+        "engine_c_admission": dict(admission or {}),
+        "evidence_contract": evidence_contract_manifest(evidence_envelope),
+        "expert_runtime": dict(expert_runtime or {}),
+        "debate_conformance": str(debate_conformance or "unknown"),
+        "wec_policy": dict(wec_policy or {}),
     }
     snapshot_id = f"runtime-{sha256_text(canonical_json(identity))[:16]}"
     return {
@@ -65,6 +75,11 @@ def save_runtime_snapshot(
     rag_context: dict[str, Any] | None = None,
     decision_params: dict[str, Any] | None = None,
     data_dir: Path | None = None,
+    admission: dict[str, Any] | None = None,
+    evidence_envelope: dict[str, Any] | None = None,
+    expert_runtime: dict[str, Any] | None = None,
+    debate_conformance: str | None = None,
+    wec_policy: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     value = snapshot or capture_runtime_snapshot(
         debate_result=debate_result,
@@ -72,6 +87,11 @@ def save_runtime_snapshot(
         rag_context=rag_context,
         decision_params=decision_params,
         data_dir=data_dir,
+        admission=admission,
+        evidence_envelope=evidence_envelope,
+        expert_runtime=expert_runtime,
+        debate_conformance=debate_conformance,
+        wec_policy=wec_policy,
     )
     snapshot_id = str(value.get("snapshot_id") or "")
     if not snapshot_id:
@@ -107,6 +127,17 @@ def decision_params_manifest(params: dict[str, Any] | None = None) -> dict[str, 
     }
 
 
+def evidence_contract_manifest(envelope: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not envelope:
+        return None
+    return {
+        "schema_version": envelope.get("schema_version"),
+        "evidence_snapshot_id": envelope.get("evidence_snapshot_id") or envelope.get("snapshot_id"),
+        "sha256": envelope.get("sha256"),
+        "evidence_ids": list(envelope.get("evidence_ids") or []),
+    }
+
+
 def model_versions(debate_result: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
     providers = (debate_result or {}).get("providers") or {}
     if not providers:
@@ -134,6 +165,7 @@ def model_versions(debate_result: dict[str, Any] | None) -> dict[str, dict[str, 
             "model_id": str(provider.get("model") or "unknown"),
             "endpoint": _safe_endpoint(str(provider.get("api_url") or "")),
         }
+        value["identity"] = f"{value['provider']}:{value['model_id']}"
         value["sha256"] = sha256_text(canonical_json(value))
         result[name] = value
     return result

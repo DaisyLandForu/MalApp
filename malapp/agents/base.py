@@ -18,6 +18,8 @@ class EvidenceBlock:
     status: str = "ok"
     rule_score: float | None = None
     ml_prior: float | None = None
+    evidence_id: str = ""
+    expert_review: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

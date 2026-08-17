@@ -66,3 +66,10 @@ def validate_model_pair(settings: dict[str, object], *, profile: str | None = No
             raise ValueError(f"model {label.upper()} endpoint and model id are required in production")
         if url:
             validate_model_endpoint(url, profile=active_profile)
+    if active_profile == "production" and enabled:
+        model_a = str(settings.get("model_a_model") or "").strip()
+        model_b = str(settings.get("model_b_model") or "").strip()
+        if model_a == model_b:
+            raise ValueError(
+                "production requires heterogeneous model identities; model A and model B ids must differ"
+            )

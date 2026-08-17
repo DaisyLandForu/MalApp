@@ -43,11 +43,12 @@ def test_judgement_and_trace_bind_the_same_runtime_snapshot() -> None:
                 "package_name": "com.malapp.runtime.governance",
                 "engine_a_score": 20,
                 "engine_b_score": 25,
+                "force_engine_c": True,
             }
         )
 
     snapshot = report["runtime_snapshot"]
-    assert report["report_schema_version"] == "agent-runtime-pipeline-v5.1-business-semantic-alignment"
+    assert report["report_schema_version"] == "agent-runtime-pipeline-v5.2-business-semantic-final"
     assert report["rag_snapshot_id"] == rag_snapshot["snapshot_id"]
     assert report["execution"]["runtime_snapshot_id"] == snapshot["snapshot_id"]
     assert snapshot["rag_snapshot"]["snapshot_id"] == rag_snapshot["snapshot_id"]

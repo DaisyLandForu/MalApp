@@ -35,7 +35,7 @@ from malapp.rag import rag_context_for_sample
 ROOT = PROJECT_ROOT
 DATA_DIR = resolve_data_dir()
 DB_PATH = DATA_DIR / "mvp.db"
-REPORT_SCHEMA_VERSION = "agent-runtime-pipeline-v5.1-business-semantic-alignment"
+REPORT_SCHEMA_VERSION = "agent-runtime-pipeline-v5.2-business-semantic-final"
 
 VERDICT_LABELS = {
     "malicious": "恶意",
@@ -1216,7 +1216,7 @@ def mark_history_reused(report: dict[str, Any], source: str) -> dict[str, Any]:
     return reused
 
 
-def build_clear_consensus_report(
+def build_engine_c_skipped_report(
     sample: dict[str, Any],
     *,
     unmapped: list[str],
@@ -1227,7 +1227,7 @@ def build_clear_consensus_report(
     admission: Any,
     decision_params: dict[str, Any],
 ) -> dict[str, Any]:
-    """Build the direct A/B result when the original Engine C gate stays closed."""
+    """Build the upstream A/B result whenever the original Engine C gate stays closed."""
     from malapp.application.engine_c_admission import direct_ab_consensus_decision
     from malapp.data_import.preprocess import set_cached_report
     from malapp.governance.runtime import save_runtime_snapshot
@@ -1348,7 +1348,7 @@ def execute_judgement(raw_sample: dict[str, Any], *, entrypoint: str = "internal
         if not admission.execute:
             for stage in pipeline.snapshot()["stage_order"]:
                 pipeline.skip(stage, "engine_c_not_admitted", {"reason": admission.reason.value})
-            return build_clear_consensus_report(
+            return build_engine_c_skipped_report(
                 normalized,
                 unmapped=unmapped,
                 evaluation_metadata=evaluation_metadata,

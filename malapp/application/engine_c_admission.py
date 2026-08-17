@@ -7,13 +7,14 @@ from enum import StrEnum
 from typing import Any
 
 ADMISSION_POLICY_ID = "engine-c-admission"
-ADMISSION_POLICY_VERSION = "1.0.0"
+ADMISSION_POLICY_VERSION = "1.1.0"
 
 
 class AdmissionReason(StrEnum):
     CONFLICT = "CONFLICT"
     AMBIGUOUS_HIGH_RISK = "AMBIGUOUS_HIGH_RISK"
     CLEAR_CONSENSUS = "CLEAR_CONSENSUS"
+    LOW_RISK_UNCERTAIN = "LOW_RISK_UNCERTAIN"
     MANUAL_FORCE = "MANUAL_FORCE"
 
 
@@ -38,6 +39,7 @@ class EngineCAdmissionDecision:
     engine_a: dict[str, Any]
     engine_b: dict[str, Any]
     details: str
+    review_required: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -89,11 +91,21 @@ class EngineCAdmissionPolicy:
                 "A/B labels agree with sufficient confidence and bounded score spread",
             )
         high_risk = max(engine_a["score"], engine_b["score"]) >= self.parameters["high_risk_threshold"]
-        detail = "same-label result is high-risk or insufficiently certain"
-        if not high_risk:
-            detail = "same-label result does not satisfy the clear-consensus confidence boundary"
+        if high_risk:
+            return self._decision(
+                True,
+                AdmissionReason.AMBIGUOUS_HIGH_RISK,
+                engine_a,
+                engine_b,
+                "same-label high-risk result does not satisfy the clear-consensus boundary",
+            )
         return self._decision(
-            True, AdmissionReason.AMBIGUOUS_HIGH_RISK, engine_a, engine_b, detail
+            False,
+            AdmissionReason.LOW_RISK_UNCERTAIN,
+            engine_a,
+            engine_b,
+            "same-label low-risk result is uncertain and requires review without Engine C",
+            review_required=True,
         )
 
     def _decision(
@@ -103,6 +115,7 @@ class EngineCAdmissionPolicy:
         engine_a: dict[str, Any],
         engine_b: dict[str, Any],
         details: str,
+        review_required: bool = False,
     ) -> EngineCAdmissionDecision:
         return EngineCAdmissionDecision(
             execute=execute,
@@ -113,18 +126,34 @@ class EngineCAdmissionPolicy:
             engine_a=engine_a,
             engine_b=engine_b,
             details=details,
+            review_required=review_required,
         )
 
 
 def ensure_ab_inputs(sample: dict[str, Any], *, production: bool) -> str:
-    required = ("engine_a_score", "engine_b_score")
+    required = (
+        "engine_a_score",
+        "engine_a_label",
+        "engine_a_confidence",
+        "engine_b_score",
+        "engine_b_label",
+        "engine_b_confidence",
+    )
     missing = [name for name in required if sample.get(name) in (None, "")]
     if missing and production:
         raise EngineInputError(missing)
+    missing_scores = [name for name in ("engine_a_score", "engine_b_score") if name in missing]
+    for name in missing_scores:
+        sample[name] = 50
+    for suffix in ("a", "b"):
+        score = _normalize_score(sample[f"engine_{suffix}_score"])
+        if sample.get(f"engine_{suffix}_label") in (None, ""):
+            sample[f"engine_{suffix}_label"] = _label(score)
+        if sample.get(f"engine_{suffix}_confidence") in (None, ""):
+            sample[f"engine_{suffix}_confidence"] = round(abs(score - 0.5) * 2, 6)
     if missing:
-        for name in missing:
-            sample[name] = 50
-        return "synthetic"
+        sample["ab_derived_fields"] = sorted(missing)
+        return "synthetic" if missing_scores else "derived"
     return "provided"
 
 
@@ -158,10 +187,18 @@ def direct_ab_consensus_decision(
         "engine_scores": scores,
         "weighted_terms": terms,
         "parameters": parameters,
-        "review_required": False,
-        "review_reasons": [],
+        "review_required": admission.review_required,
+        "review_reasons": (
+            ["low_risk_uncertain_upstream_consensus"]
+            if admission.reason == AdmissionReason.LOW_RISK_UNCERTAIN
+            else []
+        ),
         "fusion": {
-            "mode": "ab_clear_consensus",
+            "mode": (
+                "ab_low_risk_uncertain"
+                if admission.reason == AdmissionReason.LOW_RISK_UNCERTAIN
+                else "ab_clear_consensus"
+            ),
             "formula": "(A*Weight_A + B*Weight_B) / (Weight_A + Weight_B)",
             "engine_c_score": None,
         },
@@ -176,8 +213,7 @@ def direct_ab_consensus_decision(
 
 
 def _engine_view(sample: dict[str, Any], suffix: str) -> dict[str, Any]:
-    raw_score = float(sample[f"engine_{suffix}_score"])
-    score = max(0.0, min(raw_score / 100.0 if raw_score > 1 else raw_score, 1.0))
+    score = _normalize_score(sample[f"engine_{suffix}_score"])
     label = _canonical_label(sample.get(f"engine_{suffix}_label"), score)
     raw_confidence = sample.get(f"engine_{suffix}_confidence")
     if raw_confidence in (None, ""):
@@ -198,6 +234,11 @@ def _label(score: float) -> str:
     if score >= 0.45:
         return "suspicious"
     return "benign"
+
+
+def _normalize_score(value: Any) -> float:
+    raw_score = float(value)
+    return max(0.0, min(raw_score / 100.0 if raw_score > 1 else raw_score, 1.0))
 
 
 def _canonical_label(value: Any, score: float) -> str:

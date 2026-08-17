@@ -256,7 +256,7 @@ class PipelineTest(unittest.TestCase):
         self.assertIn("无法可靠判断", updated.claim)
         self.assertEqual("model_prior", updated.evidence_items[-1]["direction"])
 
-    def test_component_native_suspicious_verdict_cannot_become_auto_benign(self):
+    def test_component_disagreement_requests_review_without_overriding_wec(self):
         blocks = [
             EvidenceBlock(
                 agent=agent,
@@ -299,9 +299,9 @@ class PipelineTest(unittest.TestCase):
                 },
             },
         )
-        self.assertEqual("suspicious", decision["verdict"])
+        self.assertEqual("benign", decision["verdict"])
         self.assertTrue(decision["review_required"])
-        self.assertTrue(decision["fusion"]["policy"]["override_applied"])
+        self.assertFalse(decision["fusion"]["policy"]["override_applied"])
         self.assertIn("arbiter_suspicious", decision["review_reasons"])
 
     def test_conflict_excel_fields_are_promoted_for_specialists(self):
@@ -395,6 +395,7 @@ class PipelineTest(unittest.TestCase):
                 "apk_base64": base64.b64encode(apk_bytes.getvalue()).decode("ascii"),
                 "engine_a_score": 50,
                 "engine_b_score": 50,
+                "force_engine_c": True,
             }
         )
         static_feedback = report["preprocess"]["static_feedback"]
@@ -449,6 +450,7 @@ class PipelineTest(unittest.TestCase):
                 ],
                 "engine_a_score": 50,
                 "engine_b_score": 50,
+                "force_engine_c": True,
             }
         )
         intel = report["preprocess"]["threat_intelligence"]
@@ -480,6 +482,7 @@ class PipelineTest(unittest.TestCase):
                 ],
                 "engine_a_score": 50,
                 "engine_b_score": 50,
+                "force_engine_c": True,
             }
         )
         analysis = report["preprocess"]["impersonation_analysis"]
@@ -508,6 +511,7 @@ class PipelineTest(unittest.TestCase):
                 "fraud_family": "loan_fraud",
                 "engine_a_score": 50,
                 "engine_b_score": 50,
+                "force_engine_c": True,
             }
         )
         business = report["preprocess"]["business_label_analysis"]
@@ -531,6 +535,7 @@ class PipelineTest(unittest.TestCase):
                 "package_name": "com.runtime.test",
                 "engine_a_score": 50,
                 "engine_b_score": 50,
+                "force_engine_c": True,
                 "agent_runtime_config": {
                     "max_workers": 4,
                     "default_timeout_ms": 200,

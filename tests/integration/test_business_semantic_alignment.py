@@ -56,6 +56,23 @@ def test_engine_c_manual_force() -> None:
     assert result.reason == AdmissionReason.MANUAL_FORCE
 
 
+def test_low_risk_uncertain_does_not_enter_engine_c() -> None:
+    with patch.dict("os.environ", {"MALAPP_PROFILE": "demo", "MALAPP_MD5_REPORT_CACHE": "0"}):
+        report = judge({
+            "sample_id": "low-risk-uncertain",
+            "engine_a_score": 20,
+            "engine_b_score": 22,
+            "engine_a_label": "benign",
+            "engine_b_label": "benign",
+            "engine_a_confidence": 0.4,
+            "engine_b_confidence": 0.4,
+        })
+    assert report["engine_c"]["executed"] is False
+    assert report["engine_c"]["reason"] == "LOW_RISK_UNCERTAIN"
+    assert report["decision"]["review_required"] is True
+    assert report["decision"]["review_reasons"] == ["low_risk_uncertain_upstream_consensus"]
+
+
 def test_engine_c_skip_on_clear_consensus() -> None:
     with patch.dict("os.environ", {"MALAPP_PROFILE": "demo", "MALAPP_MD5_REPORT_CACHE": "0"}):
         report = judge({"sample_id": "clear-consensus", "engine_a_score": 5, "engine_b_score": 6})
@@ -65,9 +82,26 @@ def test_engine_c_skip_on_clear_consensus() -> None:
     assert {stage["status"] for stage in report["execution"]["pipeline"]["stages"]} == {"skipped"}
 
 
-@pytest.mark.parametrize("missing", ["engine_a_score", "engine_b_score"])
-def test_production_rejects_missing_engine_input(missing: str) -> None:
-    sample = {"engine_a_score": 5, "engine_b_score": 5}
+@pytest.mark.parametrize(
+    "missing",
+    [
+        "engine_a_score",
+        "engine_a_label",
+        "engine_a_confidence",
+        "engine_b_score",
+        "engine_b_label",
+        "engine_b_confidence",
+    ],
+)
+def test_production_requires_full_ab_outputs(missing: str) -> None:
+    sample = {
+        "engine_a_score": 5,
+        "engine_a_label": "benign",
+        "engine_a_confidence": 0.9,
+        "engine_b_score": 5,
+        "engine_b_label": "benign",
+        "engine_b_confidence": 0.9,
+    }
     sample.pop(missing)
     with patch.dict("os.environ", {"MALAPP_PROFILE": "production"}):
         with pytest.raises(EngineInputError) as error:
@@ -217,6 +251,39 @@ def test_xgb_calibrates_score_c_but_cannot_override_wec() -> None:
     assert result["wec"]["score_c_calibrated"] != result["wec"]["score_c_raw"]
     expected = sum(result["weighted_terms"].values()) / sum(result["weights"].values())
     assert result["final_score"] == pytest.approx(expected, abs=1e-6)
+
+
+def test_component_guardrails_cannot_override_wec_verdict() -> None:
+    blocks = [
+        EvidenceBlock(
+            agent=name,
+            claim="high-risk component fixture",
+            evidence=["component signal"],
+            confidence=0.95,
+            score=0.95,
+            rule_score=0.95,
+        )
+        for name in ("static_analysis", "threat_intel", "impersonation", "business_label")
+    ]
+    result = collaborative_decision(
+        {"engine_a_score": 5, "engine_b_score": 5},
+        {
+            "arbiter": {"score": 0.1, "verdict": "malicious", "rationale": "conflict"},
+            "model_a": {"confidence": 0.8},
+            "model_b": {"confidence": 0.8},
+        },
+        blocks,
+        runtime_params={
+            "initial_weights": {"engine_a": 2.25, "engine_b": 2.25, "engine_c": 0.35},
+            "score_c_xgb_calibration_weight": 0.0,
+        },
+        xgb_result={"probability": 0.95, "verdict": "malicious", "thresholds": {}},
+    )
+    assert result["final_score"] < result["parameters"]["suspicious_threshold"]
+    assert result["verdict"] == "benign"
+    assert result["review_required"] is True
+    assert result["fusion"]["policy"]["override_applied"] is False
+    assert "xgboost_native_malicious" in result["review_reasons"]
 
 
 def test_runtime_snapshot_contains_business_semantics_and_no_secret() -> None:

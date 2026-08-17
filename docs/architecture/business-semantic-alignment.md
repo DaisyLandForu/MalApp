@@ -9,15 +9,16 @@ JudgementService
   -> A/B Input Validation
   -> EngineCAdmissionPolicy
      -> CLEAR_CONSENSUS: 直接输出 A/B 共识，不运行 Engine C
+     -> LOW_RISK_UNCERTAIN: 保留 A/B 结果并要求人工复核，不运行 Engine C
      -> CONFLICT / AMBIGUOUS_HIGH_RISK / MANUAL_FORCE
         -> Engine C Internal Pipeline
         -> Score C
         -> (A*Wa+B*Wb+C*Wc)/(Wa+Wb+Wc)
 ```
 
-生产环境必须显式提供 Engine A 和 Engine B 分数，缺失时返回 `missing_upstream_engine_input`，不得合成 50 分。Demo/测试允许合成输入，但报告必须带 `ab_input_mode: synthetic`，不能视为生产合规结果。
+生产环境必须显式提供 Engine A 和 Engine B 各自的 score、label、confidence 六个字段，缺失时返回 `missing_upstream_engine_input`，不得由分数反推标签或置信度，也不得合成 50 分。Demo/测试允许推导或合成输入，但报告必须带 `ab_input_mode: derived/synthetic` 和 `ab_derived_fields`，不能视为生产合规结果。
 
-准入原因固定为 `CONFLICT`、`AMBIGUOUS_HIGH_RISK`、`CLEAR_CONSENSUS` 和 `MANUAL_FORCE`。冲突与人工强制来自原始业务边界；以下数值只是版本化、可覆盖的工程默认值，不是原需求给出的业务阈值：
+准入原因包括 `CONFLICT`、`AMBIGUOUS_HIGH_RISK`、`CLEAR_CONSENSUS`、`LOW_RISK_UNCERTAIN` 和 `MANUAL_FORCE`。只有冲突、真正的高风险模糊样本和人工强制进入 Engine C；同标签、低风险但低置信的样本不进入 Engine C，而是保留 A/B 结果并要求人工复核。冲突与人工强制来自原始业务边界；以下数值只是版本化、可覆盖的工程默认值，不是原需求给出的业务阈值：
 
 - 清晰共识最小置信度：`0.8`
 - 高风险阈值：`0.7`
@@ -56,8 +57,8 @@ XGBoost 是 Engine C 内部的先验/校准器，不是 WEC 后的第四个覆�
              Weight_A + Weight_B + Weight_C
 ```
 
-动态权重继续由版本化 Decision Params 根据冲突与关键证据调整。XGBoost、证据概率或旧 pipeline fusion 都不能在 WEC 之后覆盖最终分数。Engine C 未准入时不生成虚假 Score C，结果只按 A/B 清晰共识计算。
+动态权重继续由版本化 Decision Params 根据冲突与关键证据调整。XGBoost、仲裁器、Agent 证据或旧 pipeline fusion 都不能在 WEC 之后覆盖最终分数或最终 verdict；组件分歧只能设置 `review_required` 和 `review_reasons`。Engine C 未准入时不生成虚假 Score C，结果按 A/B 输出计算。
 
 ## 治理与缓存
 
-报告 schema 为 `agent-runtime-pipeline-v5.1-business-semantic-alignment`，旧语义缓存不会复用。RuntimeSnapshot 增加准入策略、Evidence 快照、专家模型和 prompt/tool 边界、双模型 conformance 与 WEC policy；API key/credential 不进入报告、快照或 Trace。
+报告 schema 为 `agent-runtime-pipeline-v5.2-business-semantic-final`，旧语义缓存不会复用。RuntimeSnapshot 增加准入策略、Evidence 快照、专家模型和 prompt/tool 边界、双模型 conformance 与 WEC policy；API key/credential 不进入报告、快照或 Trace。

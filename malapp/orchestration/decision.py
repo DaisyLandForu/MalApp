@@ -383,12 +383,11 @@ def guarded_verdict(
     evidence_probability: float | None,
     key_evidence: list[dict[str, Any]],
 ) -> tuple[str, dict[str, Any]]:
-    """Apply component-native thresholds and route conflicts to review.
+    """Preserve the WEC verdict and route component conflicts to review.
 
-    The numeric fused score has its own configured thresholds.  Component
-    verdicts are guardrails only: a signal that is suspicious under its native
-    calibration may not silently become benign because another score uses a
-    different threshold scale.
+    The WEC score and its configured thresholds are authoritative. Component
+    verdicts retain their native thresholds only to explain disagreement and
+    require human review; they never replace the WEC-derived verdict.
     """
     score_verdict = verdict_from_score(score, params)
     arbiter = debate_report.get("arbiter") or {}
@@ -405,7 +404,6 @@ def guarded_verdict(
         for item in key_evidence
     )
     review_reasons: list[str] = []
-    verdict = score_verdict
     if score_verdict == "benign":
         if xgb_verdict in {"suspicious", "malicious"}:
             review_reasons.append(f"xgboost_native_{xgb_verdict}")
@@ -413,8 +411,6 @@ def guarded_verdict(
             review_reasons.append(f"arbiter_{llm_verdict}")
         if credible_malicious_evidence:
             review_reasons.append("credible_agent_malicious_evidence")
-        if review_reasons:
-            verdict = "suspicious"
     component_verdicts = [
         value
         for value in (xgb_verdict, llm_verdict, score_verdict)
@@ -422,13 +418,13 @@ def guarded_verdict(
     ]
     if len(set(component_verdicts)) > 1:
         review_reasons.append("component_disagreement")
-    return verdict, {
+    return score_verdict, {
         "score_verdict": score_verdict,
         "xgboost_verdict": xgb_verdict,
         "arbiter_verdict": llm_verdict,
         "credible_malicious_evidence": credible_malicious_evidence,
         "evidence_probability": evidence_probability,
-        "override_applied": verdict != score_verdict,
+        "override_applied": False,
         "review_reasons": sorted(set(review_reasons)),
     }
 

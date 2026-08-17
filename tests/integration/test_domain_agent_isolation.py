@@ -16,6 +16,7 @@ class DomainAgentIsolationTest(unittest.TestCase):
             "control_url": "https://risk.example.test/c2",
             "engine_a_score": 65,
             "engine_b_score": 62,
+            "force_engine_c": True,
             "agent_runtime_config": {
                 "default_timeout_ms": 500,
                 "agents": {"threat_intel": {"max_retries": 0}},
@@ -38,7 +39,7 @@ class DomainAgentIsolationTest(unittest.TestCase):
         runtime = report["preprocess"]["agent_runtime"]
         self.assertEqual(
             report["report_schema_version"],
-            "agent-runtime-pipeline-v5.1-business-semantic-alignment",
+            "agent-runtime-pipeline-v5.2-business-semantic-final",
         )
         self.assertEqual(runtime["agents"]["threat_intel"]["status"], "timeout")
         self.assertEqual(runtime["agents"]["threat_intel"]["failure_type"], "timeout")

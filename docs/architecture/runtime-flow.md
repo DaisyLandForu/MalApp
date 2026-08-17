@@ -10,8 +10,8 @@ FastAPI / Batch / Hermes MCP
        JudgementService
              ↓
  A/B INPUT VALIDATION → ENGINE C ADMISSION
-       ↙ CLEAR          ↘ RUN ENGINE C
-  A/B CONSENSUS       NORMALIZE → STATIC_EXTRACTION
+  ↙ CLEAR/LOW-RISK       ↘ RUN ENGINE C
+ A/B RESULT + REVIEW   NORMALIZE → STATIC_EXTRACTION
        │                     ↓
        │               AGENT_EXECUTION
        │           （统一 Runtime 并行/重试/超时，
@@ -31,7 +31,7 @@ FastAPI / Batch / Hermes MCP
                   Report + Agent Trace + Reward
 ```
 
-八阶段状态机是 Engine C 的内部流水线。清晰 A/B 共识不进入 Engine C，八阶段全部记录为 `skipped`，也不生成 Score C。
+八阶段状态机是 Engine C 的内部流水线。清晰 A/B 共识和低风险不确定结果都不进入 Engine C，八阶段全部记录为 `skipped`，也不生成 Score C；后者额外设置人工复核。
 
 旧版线性图如下逻辑已由上图取代：
 

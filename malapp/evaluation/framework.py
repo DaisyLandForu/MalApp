@@ -4,8 +4,6 @@ import csv
 import hashlib
 import json
 import math
-import os
-import platform
 import sqlite3
 import statistics
 from collections import Counter
@@ -624,81 +622,19 @@ def build_rag_retrieval_scorecard(dataset_jsonl: Path) -> dict[str, Any]:
     }
 
 
-def _sanitized_model_settings(data_dir: Path) -> dict[str, Any]:
-    saved = _read_json(data_dir / "model_settings.json", {})
-    result = {}
-    for key in (
-        "server_models_enabled",
-        "model_a_api_url",
-        "model_a_model",
-        "model_b_api_url",
-        "model_b_model",
-        "local_qwen_enabled",
-        "model",
-    ):
-        value = saved.get(key, os.getenv(f"MALAPP_{key.upper()}", ""))
-        if value not in ("", None):
-            result[key] = value
-    return result
-
-
 def capture_runtime_snapshot(data_dir: Path | None = None) -> dict[str, Any]:
-    target_data_dir = data_dir or resolve_data_dir()
-    code_files = [
-        ROOT / "malapp" / "version.py",
-        ROOT / "malapp" / "application" / "judgement.py",
-        ROOT / "malapp" / "orchestration" / "debate.py",
-        ROOT / "malapp" / "rag" / "store.py",
-        ROOT / "malapp" / "orchestration" / "decision.py",
-    ]
-    code_hashes = {
-        str(path.relative_to(ROOT)).replace("\\", "/"): sha256_file(path)
-        for path in code_files
-        if path.exists()
-    }
-    settings = _sanitized_model_settings(target_data_dir)
-    snapshot = {
-        "created_at": now_iso(),
-        "platform": {
-            "system": platform.system(),
-            "release": platform.release(),
-            "python": platform.python_version(),
-            "machine": platform.machine(),
-        },
-        "models": settings,
-        "deployment": {
-            "model_a_gpu": os.getenv("MALAPP_MODEL_A_GPU", "unreported"),
-            "model_b_gpu": os.getenv("MALAPP_MODEL_B_GPU", "unreported"),
-            "cuda_visible_devices": os.getenv("CUDA_VISIBLE_DEVICES", "unreported"),
-        },
-        "rag": {
-            "enabled": os.getenv("MALAPP_RAG_ENABLED", "1"),
-            "mode": os.getenv("MALAPP_RAG_MODE", "hybrid"),
-            "embed_model": os.getenv("MALAPP_RAG_EMBED_MODEL", "BAAI/bge-small-zh-v1.5"),
-            "embed_backend": os.getenv("MALAPP_RAG_EMBED_BACKEND", "chinese_transformer"),
-            "top_k": os.getenv("MALAPP_RAG_TOP_K", "6"),
-        },
-        "evaluation": {
-            "plan_version": os.getenv("MALAPP_EVAL_PLAN_VERSION", "v1"),
-            "variant": os.getenv("MALAPP_EVAL_VARIANT", "production"),
-        },
-        "code_hashes": code_hashes,
-    }
-    snapshot["snapshot_id"] = "snapshot-" + _stable_hash(
-        json.dumps(snapshot, ensure_ascii=False, sort_keys=True)
-    )[:16]
-    return snapshot
+    from malapp.governance.runtime import capture_runtime_snapshot as capture_governed_snapshot
+
+    return capture_governed_snapshot(data_dir=data_dir)
 
 
 def save_runtime_snapshot(
     snapshot: dict[str, Any] | None = None,
     data_dir: Path | None = None,
 ) -> dict[str, Any]:
-    value = snapshot or capture_runtime_snapshot(data_dir)
-    path = evaluation_dir(data_dir) / "snapshots" / f"{value['snapshot_id']}.json"
-    if not path.exists():
-        _write_json(path, value)
-    return {**value, "path": str(path)}
+    from malapp.governance.runtime import save_runtime_snapshot as save_governed_snapshot
+
+    return save_governed_snapshot(snapshot, data_dir=data_dir)
 
 
 def _group_key(row: dict[str, Any]) -> str:

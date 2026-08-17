@@ -7,6 +7,7 @@ services:
       dockerfile: Dockerfile
       args:
         MALAPP_EXTRAS: "${MALAPP_EXTRAS:-}"
+        MALAPP_GIT_COMMIT: "${MALAPP_GIT_COMMIT:-unknown}"
     image: malapp-judgement:local
     container_name: malapp-judgement
     restart: unless-stopped

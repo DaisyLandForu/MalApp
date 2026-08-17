@@ -34,6 +34,7 @@ malapp/               在线研判核心包
   application/        单样本、批处理和 Dashboard 用例
   orchestration/      Agent 调度、辩论和最终决策
   inference/          LLM 设置、本地 Qwen 和 XGBoost Runtime
+  governance/         Artifact 校验与 RAG/Prompt/Runtime 快照
   rag/                向量检索与知识图谱
   storage/            持久化适配器
   evaluation/         在线评测与人工复核流程
@@ -147,6 +148,7 @@ python -m compileall -q apps malapp integrations training scripts
 ## Documentation
 
 - [运行架构](docs/architecture/runtime-flow.md)
+- [Artifact Governance](docs/architecture/artifact-governance.md)
 - [Docker 部署](docs/deployment.md)
 - [数据接入](docs/data-ingestion.md)
 - [RAG](docs/rag/guide.md)

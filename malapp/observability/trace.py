@@ -110,13 +110,14 @@ def build_agent_trace(report: dict[str, Any]) -> dict[str, Any]:
     execution = report.get("execution") or {}
     evidence_layers = report.get("evidence_layers") or {}
     trace_id = f"trace-{uuid.uuid4().hex[:16]}"
-    runtime_snapshot = {}
-    try:
-        from malapp.evaluation.framework import save_runtime_snapshot
+    runtime_snapshot = report.get("runtime_snapshot") or {}
+    if not runtime_snapshot:
+        try:
+            from malapp.governance.runtime import save_runtime_snapshot
 
-        runtime_snapshot = save_runtime_snapshot()
-    except Exception as exc:
-        runtime_snapshot = {"error": str(exc)}
+            runtime_snapshot = save_runtime_snapshot()
+        except Exception as exc:
+            runtime_snapshot = {"error": str(exc)}
     return {
         "trace_id": trace_id,
         "report_id": report.get("report_id"),

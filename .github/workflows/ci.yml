@@ -32,6 +32,8 @@ jobs:
           load: true
           push: false
           tags: malapp-agent:ci
+          build-args: |
+            MALAPP_GIT_COMMIT=${{ github.sha }}
       - run: docker run --rm -d --name malapp-ci -p 127.0.0.1:8765:8765 malapp-agent:ci
       - name: Health smoke test
         run: |

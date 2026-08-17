@@ -34,6 +34,7 @@ FastAPI / Batch / Hermes MCP
 - `malapp/orchestration`：统一管理注册、并发、重试、超时、失败分类、状态机、降级、辩论和决策。
 - `malapp/inference`：模型 Provider 与学习模型 Runtime。
 - `malapp/rag`：文本向量和知识图谱检索。
+- `malapp/governance`：校验 XGBoost Artifact、生成 RAG/Prompt/Runtime 版本快照。
 - `malapp/observability`：Trace、人工反馈和 Reward。
 
 ## 失败语义
@@ -43,6 +44,8 @@ Agent 超时、执行异常、证据不足和模型不可用是不同状态。�
 每个 Agent 在 `preprocess.agent_runtime.agents.<name>.trace` 中保存生命周期；每个 Pipeline Stage 在 `execution.pipeline.stages` 中保存 `completed / failed / degraded / skipped` 终态。降级原因同时进入顶层 `degradation` 与 `decision.degradation`。
 
 Hermes 不拥有第二套 Agent Pipeline。它只把 MCP 参数转换为 `JudgementRequest`，并调用与 Web、Batch 相同的 `JudgementService`。
+
+每份新报告通过 `runtime_snapshot` 绑定实际代码提交、模型 A/B、XGBoost Artifact、RAG Snapshot、Prompt Bundle、决策参数和四 Agent 版本。Trace 复用同一 Snapshot，详细字段和校验规则见 [Artifact Governance](artifact-governance.md)。
 
 ## 缓存
 

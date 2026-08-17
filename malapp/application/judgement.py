@@ -1470,14 +1470,23 @@ def execute_judgement(raw_sample: dict[str, Any], *, entrypoint: str = "internal
         pipeline.fail("FINAL_DECISION", exc)
         raise
 
+    from malapp.governance.runtime import save_runtime_snapshot
     from malapp.inference.settings import model_cache_signature
 
     pipeline.start("PERSIST")
+    runtime_snapshot = save_runtime_snapshot(
+        debate_result=debate_result,
+        xgb_result=xgb_result,
+        rag_context=rag_context,
+        decision_params=decision.get("parameters"),
+        data_dir=DATA_DIR,
+    )
     report = {
         "report_id": hashlib.sha1(json.dumps(normalized, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()[:16],
         "report_schema_version": REPORT_SCHEMA_VERSION,
         "created_at": utc_now(),
         "rag_snapshot_id": rag_context.get("rag_snapshot_id"),
+        "runtime_snapshot": runtime_snapshot,
         "sample": normalized,
         "preprocess": {
             "unmapped_fields": unmapped,
@@ -1514,6 +1523,7 @@ def execute_judgement(raw_sample: dict[str, Any], *, entrypoint: str = "internal
             "history_reused": False,
             "model_cache_signature": model_cache_signature(),
             "rag_snapshot_id": rag_context.get("rag_snapshot_id"),
+            "runtime_snapshot_id": runtime_snapshot["snapshot_id"],
             "evaluation_config": evaluation_config,
             "evaluation_variant": os.getenv("MALAPP_EVAL_VARIANT", "production"),
             "pipeline": pipeline.snapshot(),

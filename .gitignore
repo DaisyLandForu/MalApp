@@ -34,3 +34,4 @@ release/
 # Docker workspace inputs
 deploy/docker/workspace/*
 !deploy/docker/workspace/.gitkeep
+plans/*

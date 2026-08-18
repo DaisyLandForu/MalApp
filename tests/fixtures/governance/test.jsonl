@@ -1,0 +1,1 @@
+{"sample_id":"ci-test-1","md5":"22222222222222222222222222222222","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","label":"benign","label_tier":"gold","reviewed_label":"benign","reviewer":"ci-reviewer","source":"ci-holdout","source_version":"v1","group_key":"ci-test-group","features":{"permission_count":1}}

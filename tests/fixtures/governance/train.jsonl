@@ -1,0 +1,1 @@
+{"sample_id":"ci-train-1","md5":"11111111111111111111111111111111","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","label":"malicious","label_tier":"silver","source":"ci-fixture","source_version":"v1","group_key":"ci-train-group","features":{"permission_count":4}}

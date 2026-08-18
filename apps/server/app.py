@@ -19,6 +19,7 @@ from malapp.application.batch import recover_interrupted_jobs
 from malapp.application.judgement import ROOT, init_db
 from malapp.config.paths import initialize_runtime_files
 from malapp.data_import.preprocess import reset_runtime_state
+from malapp.governance.release import verify_configured_release
 from malapp.inference.settings import load_model_settings
 from malapp.inference.url_policy import validate_model_pair
 from malapp.version import APP_VERSION
@@ -32,6 +33,7 @@ def initialize_application(config: ServerConfig) -> None:
     if config.profile == "production":
         os.environ.setdefault("MALAPP_DISABLE_LLM_RULE_FALLBACK", "1")
     initialize_runtime_files()
+    verify_configured_release()
     model_settings = load_model_settings()
     validate_model_pair(model_settings, profile=config.profile)
     init_db()

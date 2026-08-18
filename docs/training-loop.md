@@ -154,7 +154,9 @@ data/exports/training_loop_YYYYMMDD_HHMMSS/
 导出 `policy_training.jsonl` 后运行：
 
 ```bash
-python -m training.sft.train_policy data/exports/training_loop_YYYYMMDD_HHMMSS/policy_training.jsonl
+python -m training.sft.train_policy \
+  data/exports/training_loop_YYYYMMDD_HHMMSS/policy_training.jsonl \
+  --dataset-manifest training_artifacts/datasets/current/dataset-manifest.json
 ```
 
 输出：

@@ -21,6 +21,7 @@ import numpy as np  # noqa: E402
 import xgboost as xgb  # noqa: E402
 
 from malapp.governance.artifacts import build_xgboost_manifest  # noqa: E402
+from malapp.governance.leakage import require_training_clearance  # noqa: E402
 from training import pipeline as base  # noqa: E402
 
 DB_PATH = OUTPUT / "xgb_training.db"
@@ -866,11 +867,15 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="XGBoost 四智能体、融合、WEC 和阈值训练")
     parser.add_argument("command", choices=("prepare", "train", "all"))
     parser.add_argument("--force", action="store_true", help="强制重新解析 SQL 和两个引擎大表")
+    parser.add_argument("--dataset-manifest")
     args = parser.parse_args()
     result = {}
     if args.command in {"prepare", "all"}:
         result["prepare"] = prepare(force=args.force)
     if args.command in {"train", "all"}:
+        if not args.dataset_manifest:
+            parser.error("--dataset-manifest is required for train/all")
+        require_training_clearance(Path(args.dataset_manifest))
         result["train"] = train()
     print(json.dumps(result, ensure_ascii=False, indent=2))
 

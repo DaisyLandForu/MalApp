@@ -6,6 +6,8 @@ import pickle
 from pathlib import Path
 from typing import Any
 
+from malapp.governance.leakage import require_training_clearance
+
 
 def flatten_features(row: dict[str, Any]) -> dict[str, float]:
     features = row.get("features") or {}
@@ -35,7 +37,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Train a baseline policy model for RAG/debate/review routing.")
     parser.add_argument("dataset", help="Path to policy_training.jsonl exported by dataset_export.")
     parser.add_argument("--output-dir", default="training_artifacts/policy_model", help="Directory for trained artifacts.")
+    parser.add_argument("--dataset-manifest", required=True)
     args = parser.parse_args()
+
+    require_training_clearance(
+        Path(args.dataset_manifest),
+        required_partitions={"train", "test"},
+    )
 
     try:
         from sklearn.ensemble import RandomForestClassifier

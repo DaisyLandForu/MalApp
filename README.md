@@ -142,6 +142,7 @@ python -m scripts.evaluation.run_evaluation gate \
   --candidate outputs/candidate-scorecard.json \
   --output outputs/candidate-gate-report.json
 python -m scripts.training.build_corpora --help
+python -m scripts.governance.manage --help
 ```
 
 ## Test
@@ -163,5 +164,6 @@ python -m compileall -q apps malapp integrations training scripts
 - [RAG](docs/rag/guide.md)
 - [评测](docs/evaluation/plan.md)
 - [训练闭环](docs/training-loop.md)
+- [P6 训练、晋级与发布治理](docs/governance/training-promotion-release.md)
 
 项目只对 APK 做静态解析，不执行未知 APK。公网生产部署仍应使用 API Gateway/TLS、上游限流、Secret Manager，并补充正式数据库迁移机制。

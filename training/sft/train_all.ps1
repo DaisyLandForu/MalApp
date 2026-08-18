@@ -1,6 +1,8 @@
 param(
     [Parameter(Mandatory = $true)]
     [string]$Model,
+    [Parameter(Mandatory = $true)]
+    [string]$DatasetManifest,
     [switch]$QLoRA
 )
 
@@ -13,7 +15,8 @@ foreach ($agent in $agents) {
     $arguments = @(
         (Join-Path $PSScriptRoot "train.py"),
         "--agent", $agent,
-        "--model", $Model
+        "--model", $Model,
+        "--dataset-manifest", $DatasetManifest
     )
     if ($QLoRA) {
         $arguments += "--qlora"

@@ -20,6 +20,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from malapp.governance.artifacts import build_xgboost_manifest  # noqa: E402
+from malapp.governance.leakage import require_training_clearance  # noqa: E402
 from training.xgboost import pipeline as xp  # noqa: E402
 
 DEFAULT_OUT = ROOT / "training_artifacts" / "xgb_selected_20260616"
@@ -429,7 +430,9 @@ def main() -> None:
     parser.add_argument("--manual", required=True)
     parser.add_argument("--consensus", required=True)
     parser.add_argument("--out", default=str(DEFAULT_OUT))
+    parser.add_argument("--dataset-manifest", required=True)
     args = parser.parse_args()
+    require_training_clearance(Path(args.dataset_manifest))
     paths = {
         "malicious": Path(args.malicious),
         "white": Path(args.white),

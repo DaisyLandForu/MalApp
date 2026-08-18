@@ -55,6 +55,7 @@ malapp-evaluate = "scripts.evaluation.run_evaluation:main"
 malapp-five-layer-evaluate = "scripts.evaluation.run_five_layer:main"
 malapp-build-rag = "scripts.rag.build_index:main"
 malapp-build-training-corpora = "scripts.training.build_corpora:main"
+malapp-govern = "scripts.governance.manage:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

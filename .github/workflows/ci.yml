@@ -25,6 +25,19 @@ jobs:
             --baseline tests/fixtures/evaluation/approved-baseline-scorecard.json \
             --candidate tests/fixtures/evaluation/candidate-scorecard.json \
             --output /tmp/regression-gate.json
+      - name: P6 dataset lineage and leakage gate self-test
+        run: |
+          python -m scripts.governance.manage dataset-build \
+            --name ci-governance-fixture \
+            --input train=tests/fixtures/governance/train.jsonl \
+            --input test=tests/fixtures/governance/test.jsonl \
+            --output-dir /tmp/malapp-governed-dataset
+          python -m scripts.governance.manage dataset-validate \
+            --manifest /tmp/malapp-governed-dataset/dataset-manifest.json \
+            --verify-sources
+          python -m scripts.governance.manage leakage-audit \
+            --manifest /tmp/malapp-governed-dataset/dataset-manifest.json \
+            --output /tmp/malapp-leakage-audit.json
       - run: docker compose config
 
   docker:

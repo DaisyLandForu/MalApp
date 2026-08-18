@@ -4,6 +4,8 @@ import argparse
 import json
 from pathlib import Path
 
+from malapp.governance.leakage import require_training_clearance
+
 AGENTS = ("static_analysis", "threat_intel", "impersonation", "business_label")
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -135,7 +137,13 @@ def main():
     parser.add_argument("--learning-rate", type=float, default=2e-4)
     parser.add_argument("--max-length", type=int, default=2048)
     parser.add_argument("--qlora", action="store_true")
+    parser.add_argument("--dataset-manifest", required=True)
     args = parser.parse_args()
+
+    require_training_clearance(
+        Path(args.dataset_manifest),
+        required_partitions={"train", "dev"},
+    )
 
     deps = require_dependencies()
     torch = deps["torch"]

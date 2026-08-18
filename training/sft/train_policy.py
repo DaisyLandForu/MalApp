@@ -6,6 +6,7 @@ import pickle
 from pathlib import Path
 from typing import Any
 
+from malapp.governance.datasets import resolve_partition_sources
 from malapp.governance.leakage import require_training_clearance
 
 
@@ -33,42 +34,62 @@ def load_rows(path: Path) -> list[dict[str, Any]]:
         return [json.loads(line) for line in f if line.strip()]
 
 
+def governed_policy_sources(manifest_path: Path) -> dict[str, Path]:
+    require_training_clearance(
+        manifest_path,
+        required_partitions={"train", "test"},
+    )
+    return resolve_partition_sources(
+        manifest_path,
+        required_partitions={"train", "test"},
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train a baseline policy model for RAG/debate/review routing.")
-    parser.add_argument("dataset", help="Path to policy_training.jsonl exported by dataset_export.")
     parser.add_argument("--output-dir", default="training_artifacts/policy_model", help="Directory for trained artifacts.")
     parser.add_argument("--dataset-manifest", required=True)
     args = parser.parse_args()
 
-    require_training_clearance(
-        Path(args.dataset_manifest),
-        required_partitions={"train", "test"},
-    )
+    dataset_sources = governed_policy_sources(Path(args.dataset_manifest))
 
     try:
         from sklearn.ensemble import RandomForestClassifier
         from sklearn.metrics import classification_report
-        from sklearn.model_selection import train_test_split
     except Exception as exc:
         raise SystemExit(f"Missing dependency scikit-learn: {exc}") from exc
 
-    rows = load_rows(Path(args.dataset))
-    if len(rows) < 10:
-        raise SystemExit("Need at least 10 policy rows to train a useful baseline.")
-    feature_rows = [flatten_features(row) for row in rows]
+    train_rows = load_rows(dataset_sources["train"])
+    test_rows = load_rows(dataset_sources["test"])
+    if len(train_rows) < 10 or not test_rows:
+        raise SystemExit("Need at least 10 governed train rows and one governed test row.")
+    feature_rows = [flatten_features(row) for row in train_rows]
+    test_feature_rows = [flatten_features(row) for row in test_rows]
     feature_names = list(feature_rows[0].keys())
-    x = [[item[name] for name in feature_names] for item in feature_rows]
-    labels = {
-        "use_rag": [int((row.get("label") or {}).get("use_rag") or 0) for row in rows],
-        "full_debate": [int((row.get("label") or {}).get("full_debate") or 0) for row in rows],
-        "human_review": [int((row.get("label") or {}).get("human_review") or 0) for row in rows],
+    x_train = [[item[name] for name in feature_names] for item in feature_rows]
+    x_test = [[item[name] for name in feature_names] for item in test_feature_rows]
+    train_labels = {
+        "use_rag": [int((row.get("label") or {}).get("use_rag") or 0) for row in train_rows],
+        "full_debate": [int((row.get("label") or {}).get("full_debate") or 0) for row in train_rows],
+        "human_review": [int((row.get("label") or {}).get("human_review") or 0) for row in train_rows],
+    }
+    test_labels = {
+        "use_rag": [int((row.get("label") or {}).get("use_rag") or 0) for row in test_rows],
+        "full_debate": [int((row.get("label") or {}).get("full_debate") or 0) for row in test_rows],
+        "human_review": [int((row.get("label") or {}).get("human_review") or 0) for row in test_rows],
     }
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    report: dict[str, Any] = {"row_count": len(rows), "feature_names": feature_names, "tasks": {}}
+    report: dict[str, Any] = {
+        "train_row_count": len(train_rows),
+        "test_row_count": len(test_rows),
+        "dataset_manifest": str(Path(args.dataset_manifest).expanduser().resolve()),
+        "feature_names": feature_names,
+        "tasks": {},
+    }
     models = {}
-    for task, y in labels.items():
-        x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=0.25, random_state=42, stratify=y if len(set(y)) > 1 else None)
+    for task, y_train in train_labels.items():
+        y_test = test_labels[task]
         model = RandomForestClassifier(n_estimators=120, max_depth=5, random_state=42, class_weight="balanced")
         model.fit(x_train, y_train)
         pred = model.predict(x_test)

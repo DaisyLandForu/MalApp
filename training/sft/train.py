@@ -4,6 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
+from malapp.governance.datasets import resolve_partition_sources
 from malapp.governance.leakage import require_training_clearance
 
 AGENTS = ("static_analysis", "threat_intel", "impersonation", "business_label")
@@ -126,6 +127,17 @@ class CausalCollator:
         return {key: self.torch.stack(value) for key, value in batch.items()}
 
 
+def governed_sft_sources(manifest_path: Path) -> dict[str, Path]:
+    require_training_clearance(
+        manifest_path,
+        required_partitions={"train", "dev"},
+    )
+    return resolve_partition_sources(
+        manifest_path,
+        required_partitions={"train", "dev"},
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description="四智能体独立 LoRA/QLoRA SFT")
     parser.add_argument("--agent", required=True, choices=AGENTS)
@@ -140,14 +152,10 @@ def main():
     parser.add_argument("--dataset-manifest", required=True)
     args = parser.parse_args()
 
-    require_training_clearance(
-        Path(args.dataset_manifest),
-        required_partitions={"train", "dev"},
-    )
+    dataset_sources = governed_sft_sources(Path(args.dataset_manifest))
 
     deps = require_dependencies()
     torch = deps["torch"]
-    data_dir = ROOT / "training_artifacts" / "sft" / args.agent
     output_dir = (
         Path(args.output)
         if args.output
@@ -188,10 +196,10 @@ def main():
     )
     model = deps["get_peft_model"](model, lora)
     train_data = JsonlChatDataset(
-        data_dir / "train.jsonl", tokenizer, args.max_length, torch
+        dataset_sources["train"], tokenizer, args.max_length, torch
     )
     val_data = JsonlChatDataset(
-        data_dir / "val.jsonl", tokenizer, args.max_length, torch
+        dataset_sources["dev"], tokenizer, args.max_length, torch
     )
     training_args = deps["TrainingArguments"](
         output_dir=str(output_dir),

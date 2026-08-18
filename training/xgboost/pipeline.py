@@ -21,7 +21,7 @@ import numpy as np  # noqa: E402
 import xgboost as xgb  # noqa: E402
 
 from malapp.governance.artifacts import build_xgboost_manifest  # noqa: E402
-from malapp.governance.leakage import require_training_clearance  # noqa: E402
+from malapp.governance.leakage import require_bound_training_sources  # noqa: E402
 from training import pipeline as base  # noqa: E402
 
 DB_PATH = OUTPUT / "xgb_training.db"
@@ -467,7 +467,11 @@ def feature_vector(md5: str, sample: dict[str, Any], refs: dict[str, set[str]]) 
     }
 
 
-def train() -> dict[str, Any]:
+def train(dataset_manifest_path: Path) -> dict[str, Any]:
+    clearance = require_bound_training_sources(
+        dataset_manifest_path,
+        {"xgb_training_db": DB_PATH},
+    )
     conn = connect()
     model_dir = OUTPUT / "models"
     curve_dir = OUTPUT / "curves"
@@ -514,7 +518,12 @@ def train() -> dict[str, Any]:
         export_test_set(conn, wec_rows, wec, wec_features, thresholds)
         conn.commit()
         conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        write_runtime_manifest(model_dir, thresholds, report)
+        write_runtime_manifest(
+            model_dir,
+            thresholds,
+            report,
+            clearance["audit"]["dataset_id"],
+        )
     finally:
         conn.close()
     (OUTPUT / "training_report.json").write_text(
@@ -786,6 +795,7 @@ def write_runtime_manifest(
     model_dir: Path,
     thresholds: dict[str, Any],
     metrics: dict[str, Any],
+    dataset_version: str,
 ) -> None:
     manifest = build_xgboost_manifest(
         model_dir=model_dir,
@@ -801,6 +811,7 @@ def write_runtime_manifest(
         ],
         thresholds=thresholds,
         metrics=metrics,
+        dataset_version=dataset_version,
         model_version="xgb-runtime-v1",
     )
     (model_dir / "runtime_manifest.json").write_text(
@@ -865,18 +876,17 @@ def prepare(force: bool = False) -> dict[str, Any]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="XGBoost 四智能体、融合、WEC 和阈值训练")
-    parser.add_argument("command", choices=("prepare", "train", "all"))
+    parser.add_argument("command", choices=("prepare", "train"))
     parser.add_argument("--force", action="store_true", help="强制重新解析 SQL 和两个引擎大表")
     parser.add_argument("--dataset-manifest")
     args = parser.parse_args()
     result = {}
-    if args.command in {"prepare", "all"}:
+    if args.command == "prepare":
         result["prepare"] = prepare(force=args.force)
-    if args.command in {"train", "all"}:
+    if args.command == "train":
         if not args.dataset_manifest:
-            parser.error("--dataset-manifest is required for train/all")
-        require_training_clearance(Path(args.dataset_manifest))
-        result["train"] = train()
+            parser.error("--dataset-manifest is required for train")
+        result["train"] = train(Path(args.dataset_manifest))
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 

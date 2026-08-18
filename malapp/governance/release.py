@@ -18,6 +18,7 @@ from malapp.governance.artifacts import (
     sha256_text,
 )
 from malapp.governance.datasets import validate_dataset_manifest
+from malapp.governance.leakage import require_training_clearance
 from malapp.governance.promotion import load_registry
 from malapp.governance.runtime import capture_runtime_snapshot
 
@@ -58,10 +59,18 @@ def build_release_snapshot(
         raise ReleaseError(f"registry Champion has invalid state: {champion.get('status')}")
     _verify_candidate_artifacts(champion)
 
-    dataset_validated = validate_dataset_manifest(dataset_manifest_path)
+    release_clearance = require_training_clearance(dataset_manifest_path)
+    dataset_validated = validate_dataset_manifest(dataset_manifest_path, verify_sources=True)
     dataset = dataset_validated["manifest"]
-    if champion.get("dataset", {}).get("sha256") != dataset.get("sha256"):
+    champion_dataset = champion.get("dataset", {})
+    if champion_dataset.get("manifest_sha256") != dataset.get("sha256"):
         raise ReleaseError("release dataset does not match the promoted candidate dataset")
+    if (
+        champion_dataset.get("leakage_status") != "pass"
+        or release_clearance["status"] != "pass"
+        or champion_dataset.get("leakage_audit_sha256") != release_clearance["audit_sha256"]
+    ):
+        raise ReleaseError("release leakage audit does not match the promoted candidate clearance")
 
     baseline = load_scorecard(baseline_scorecard_path)
     candidate_scorecard = load_scorecard(candidate_scorecard_path)
@@ -105,6 +114,9 @@ def build_release_snapshot(
             "manifest_sha256": dataset["sha256"],
             "lineage_sha256": dataset["lineage_sha256"],
             "manifest": _file_reference(dataset_manifest_path),
+            "leakage_status": release_clearance["status"],
+            "leakage_audit_sha256": release_clearance["audit_sha256"],
+            "leakage_required_partitions": release_clearance["required_partitions"],
         },
         "evaluation": {
             "dataset_sha256": candidate_scorecard.get("validation_sha256"),
@@ -179,6 +191,17 @@ def validate_release_snapshot(path: Path, *, verify_references: bool = True) -> 
         _verify_reference(release["evaluation"]["candidate_scorecard"], "candidate scorecard")
         _verify_reference(release["evaluation"]["gate_policy"], "regression gate policy")
         validate_dataset_manifest(Path(release["dataset"]["manifest"]["path"]))
+        clearance = require_training_clearance(
+            Path(release["dataset"]["manifest"]["path"]),
+            required_partitions=set(release["dataset"].get("leakage_required_partitions") or []),
+        )
+        if (
+            release["dataset"].get("leakage_status") != "pass"
+            or clearance["audit_sha256"] != release["dataset"].get("leakage_audit_sha256")
+            or clearance["audit_sha256"]
+            != release.get("champion", {}).get("dataset", {}).get("leakage_audit_sha256")
+        ):
+            raise ReleaseError("release leakage audit cannot be reproduced from the governed dataset")
         baseline = load_scorecard(Path(release["evaluation"]["baseline_scorecard"]["path"]))
         candidate = load_scorecard(Path(release["evaluation"]["candidate_scorecard"]["path"]))
         policy = load_gate_policy(Path(release["evaluation"]["gate_policy"]["path"]))

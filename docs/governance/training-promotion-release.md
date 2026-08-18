@@ -16,7 +16,7 @@ Release Snapshot → Verify → Deploy / Rollback
 
 ## 1. 数据血缘
 
-输入必须是 JSONL，并为每个文件声明 Partition：
+用于生成逐样本 lineage 的规范化输入必须是 JSONL，并为每个文件声明 Partition；Excel、SQLite 等训练原始源通过独立 role 绑定：
 
 ```bash
 python -m scripts.governance.manage dataset-build \
@@ -24,6 +24,10 @@ python -m scripts.governance.manage dataset-build \
   --input train=outputs/train.jsonl \
   --input dev=outputs/dev.jsonl \
   --input test=outputs/frozen-test.jsonl \
+  --source malicious=source/known-malicious.xlsx \
+  --source white=source/known-white.xlsx \
+  --source manual=source/manual-conflicts.xlsx \
+  --source consensus=source/consensus-benign.xlsx \
   --output-dir training_artifacts/datasets/malapp-training-2026q3
 ```
 
@@ -34,7 +38,7 @@ dataset-manifest.json
 dataset-lineage.jsonl
 ```
 
-每条 lineage 绑定 `sample_id/source/source_version/original_label/reviewed_label/reviewer/evidence/created_at/group_key/label_tier/partition`，同时提取 APK、证书、Family 和特征名称用于泄漏审计。标签等级只有：
+每条 lineage 绑定 `sample_id/source/source_version/original_label/reviewed_label/reviewer/evidence/created_at/group_key/label_tier/partition`，同时提取 APK、证书、Family 和特征名称用于泄漏审计。`--source role=path` 用来额外绑定 Excel、SQLite 等真正参与训练的原始文件及其 SHA256。标签等级只有：
 
 ```text
 raw → silver → human_reviewed → gold
@@ -65,7 +69,15 @@ python -m scripts.governance.manage leakage-audit \
 PASS=0  FAIL=1  BLOCKED=2
 ```
 
-所有正式 SFT、Policy 和 XGBoost 训练入口都要求 `--dataset-manifest`，并在加载模型或开始训练前重新执行审计。单独保存一份旧 audit 报告不能绕过门禁。
+所有正式 SFT、Policy 和 XGBoost 训练入口都要求 `--dataset-manifest`，并在加载模型或开始训练前重新执行审计和文件 SHA256 校验。单独保存一份旧 audit 报告不能绕过门禁：
+
+```text
+SFT       从 Manifest 的 train/dev partition 解析实际 JSONL
+Policy    从 Manifest 的 train/test partition 解析实际 JSONL
+XGBoost   将命令行 Excel 或训练 SQLite 与 Manifest source role 逐一比对
+```
+
+例如四文件 XGBoost 入口要求 Manifest 中存在 `malicious/white/manual/consensus` 四个 source role。标准 `training.xgboost.pipeline` 先执行 `prepare`，再把生成的 `xgb_training.db` 以 `xgb_training_db` role 写入 Manifest，最后单独执行 `train --dataset-manifest ...`。不再提供把准备和训练混在一起、无法预先绑定 DB 摘要的 `all` 命令。
 
 ## 3. Champion / Challenger
 
@@ -109,7 +121,9 @@ python -m scripts.governance.manage candidate-approve --registry ... --candidate
 python -m scripts.governance.manage candidate-promote --registry ... --candidate-id ...
 ```
 
-状态机禁止跳过 Gate、Shadow 或人工批准。Registry 采用原子替换和进程锁；新 Champion 上线后旧 Champion 保留为可回滚目标：
+状态机禁止跳过 Gate、Shadow 或人工批准。Candidate 注册会重新执行 Leakage Audit，只接受 `status=pass`，并保存 `manifest_sha256/leakage_audit_sha256/leakage_status`。声明了 `dataset_version` 的模型 Artifact 也必须和 Candidate Dataset 一致。
+
+Registry 采用原子替换和进程锁；新 Champion 上线后旧 Champion 保留为可回滚目标：
 
 ```bash
 python -m scripts.governance.manage candidate-rollback \
@@ -135,7 +149,7 @@ python -m scripts.governance.manage release-build \
   --output-dir training_artifacts/releases
 ```
 
-Release Snapshot 绑定 Git Commit、Docker Digest、Agent、Prompt、模型 A/B、XGBoost、RAG、决策参数、数据集、Scorecard、Gate、Champion 和回滚目标。构建过程会重新执行 P5 Gate，并拒绝工件篡改或 Secret 字段。
+Release Snapshot 绑定 Git Commit、Docker Digest、Agent、Prompt、模型 A/B、XGBoost、RAG、决策参数、数据集、Scorecard、Gate、Champion 和回滚目标。构建与启动验证都会重新执行 Leakage Audit，并要求当前 `audit_sha256` 与 Champion 注册时完全相同；同时重新执行 P5 Gate，并拒绝工件篡改或 Secret 字段。
 
 部署前验证：
 

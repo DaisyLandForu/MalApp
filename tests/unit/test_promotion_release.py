@@ -5,7 +5,9 @@ from pathlib import Path
 
 import pytest
 
+import malapp.governance.release as release_governance
 from malapp.governance.datasets import build_dataset_manifest
+from malapp.governance.leakage import TrainingLeakageError, require_training_clearance
 from malapp.governance.promotion import (
     PromotionError,
     approve_candidate,
@@ -139,6 +141,8 @@ def test_challenger_requires_gate_shadow_and_human_approval(tmp_path: Path) -> N
     assert value["champions"]["judgement-runtime"] == "candidate-v1"
     assert value["candidates"]["candidate-v1"]["status"] == "champion"
     assert value["candidates"]["candidate-v1"]["approval"]["approver"] == "release-owner"
+    assert value["candidates"]["candidate-v1"]["dataset"]["leakage_status"] == "pass"
+    assert value["candidates"]["candidate-v1"]["dataset"]["leakage_audit_sha256"]
 
 
 def test_release_snapshot_binds_governed_runtime_and_detects_tampering(tmp_path: Path) -> None:
@@ -231,6 +235,91 @@ def test_release_snapshot_rejects_secret_material(tmp_path: Path) -> None:
     write_json(runtime, runtime_value)
 
     with pytest.raises(ReleaseError, match="secret-like"):
+        build_release_snapshot(
+            version="2.1.0",
+            component="judgement-runtime",
+            registry_path=registry,
+            dataset_manifest_path=dataset,
+            baseline_scorecard_path=BASELINE,
+            candidate_scorecard_path=CANDIDATE_SCORECARD,
+            docker_image_digest="sha256:" + "9" * 64,
+            output_dir=tmp_path / "releases",
+            runtime_snapshot_path=runtime,
+        )
+
+
+def test_leaky_dataset_cannot_register_candidate(tmp_path: Path) -> None:
+    train = tmp_path / "leaky-train.jsonl"
+    test = tmp_path / "leaky-test.jsonl"
+    common = {
+        "label": "malicious",
+        "label_tier": "silver",
+        "source": "unit",
+        "source_version": "v1",
+        "group_key": "shared-family",
+    }
+    train.write_text(json.dumps({**common, "sample_id": "train-leaky"}) + "\n", encoding="utf-8")
+    test.write_text(json.dumps({**common, "sample_id": "test-leaky"}) + "\n", encoding="utf-8")
+    dataset_dir = tmp_path / "leaky-dataset"
+    build_dataset_manifest(
+        dataset_name="leaky",
+        inputs={"train": train, "test": test},
+        output_dir=dataset_dir,
+    )
+    artifact = tmp_path / "artifact.json"
+    write_json(artifact, {"artifact_id": "leaky-model", "artifact_type": "fixture"})
+
+    with pytest.raises(TrainingLeakageError, match="training blocked"):
+        register_candidate(
+            tmp_path / "registry.json",
+            candidate_id="leaky-candidate",
+            component="judgement-runtime",
+            artifact_manifests=[artifact],
+            dataset_manifest_path=dataset_dir / "dataset-manifest.json",
+        )
+
+
+def test_release_recomputes_leakage_audit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    dataset, artifact, runtime = governed_inputs(tmp_path)
+    registry = tmp_path / "registry.json"
+    promote(tmp_path, registry, dataset, artifact, "candidate-v1")
+    calls = 0
+
+    def tracked_clearance(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return require_training_clearance(*args, **kwargs)
+
+    monkeypatch.setattr(release_governance, "require_training_clearance", tracked_clearance)
+    release = build_release_snapshot(
+        version="2.1.0",
+        component="judgement-runtime",
+        registry_path=registry,
+        dataset_manifest_path=dataset,
+        baseline_scorecard_path=BASELINE,
+        candidate_scorecard_path=CANDIDATE_SCORECARD,
+        docker_image_digest="sha256:" + "9" * 64,
+        output_dir=tmp_path / "releases",
+        runtime_snapshot_path=runtime,
+    )
+    validate_release_snapshot(Path(release["path"]))
+    assert calls == 2
+
+
+def test_release_rejects_dataset_whose_audit_changed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset, artifact, runtime = governed_inputs(tmp_path)
+    registry = tmp_path / "registry.json"
+    promote(tmp_path, registry, dataset, artifact, "candidate-v1")
+
+    def changed_clearance(*args, **kwargs):
+        report = require_training_clearance(*args, **kwargs)
+        return {**report, "audit_sha256": "0" * 64}
+
+    monkeypatch.setattr(release_governance, "require_training_clearance", changed_clearance)
+    with pytest.raises(ReleaseError, match="leakage audit"):
         build_release_snapshot(
             version="2.1.0",
             component="judgement-runtime",

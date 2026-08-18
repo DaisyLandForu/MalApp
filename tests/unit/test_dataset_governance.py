@@ -14,9 +14,12 @@ from malapp.governance.leakage import (
     TrainingLeakageError,
     audit_dataset_manifest,
     audit_lineage_records,
+    require_bound_training_sources,
     require_training_clearance,
 )
 from scripts.governance.manage import cmd_leakage
+from training.sft.train import governed_sft_sources
+from training.sft.train_policy import governed_policy_sources
 
 
 def write_jsonl(path: Path, rows: list[dict]) -> None:
@@ -165,3 +168,56 @@ def test_leakage_cli_exit_codes_are_stable(tmp_path: Path) -> None:
     with pytest.raises(SystemExit) as blocked:
         cmd_leakage(Args())
     assert blocked.value.code == 2
+
+
+def test_sft_rejects_dataset_not_bound_to_manifest(tmp_path: Path) -> None:
+    train, test = safe_rows()
+    train_path = tmp_path / "sft-train.jsonl"
+    dev_path = tmp_path / "sft-dev.jsonl"
+    write_jsonl(train_path, train)
+    write_jsonl(dev_path, test)
+    manifest_dir = tmp_path / "sft-manifest"
+    build_dataset_manifest(
+        dataset_name="sft-bound",
+        inputs={"train": train_path, "dev": dev_path},
+        output_dir=manifest_dir,
+    )
+    train_path.write_text(train_path.read_text(encoding="utf-8") + "{}\n", encoding="utf-8")
+
+    with pytest.raises(DatasetIntegrityError, match="source.*mismatch"):
+        governed_sft_sources(manifest_dir / "dataset-manifest.json")
+
+
+def test_policy_rejects_dataset_not_bound_to_manifest(tmp_path: Path) -> None:
+    manifest_path, _ = build_safe_dataset(tmp_path)
+    governed = governed_policy_sources(manifest_path)
+    assert governed["train"].name == "train.jsonl"
+    governed["test"].write_text("{}\n", encoding="utf-8")
+
+    with pytest.raises(DatasetIntegrityError, match="source.*mismatch"):
+        governed_policy_sources(manifest_path)
+
+
+def test_xgb_rejects_source_not_bound_to_manifest(tmp_path: Path) -> None:
+    train, test = safe_rows()
+    train_path = tmp_path / "train.jsonl"
+    test_path = tmp_path / "test.jsonl"
+    governed_excel = tmp_path / "malicious.xlsx"
+    other_excel = tmp_path / "other.xlsx"
+    write_jsonl(train_path, train)
+    write_jsonl(test_path, test)
+    governed_excel.write_bytes(b"governed-xlsx-bytes")
+    other_excel.write_bytes(b"different-xlsx-bytes")
+    manifest_dir = tmp_path / "xgb-manifest"
+    build_dataset_manifest(
+        dataset_name="xgb-bound",
+        inputs={"train": train_path, "test": test_path},
+        bound_sources={"malicious": governed_excel},
+        output_dir=manifest_dir,
+    )
+
+    with pytest.raises(DatasetIntegrityError, match="does not match Manifest"):
+        require_bound_training_sources(
+            manifest_dir / "dataset-manifest.json",
+            {"malicious": other_excel},
+        )

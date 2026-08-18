@@ -13,6 +13,7 @@ from typing import Any, Iterator
 from malapp.evaluation.gates import evaluate_regression_gate, load_gate_policy, load_scorecard
 from malapp.governance.artifacts import canonical_json, now_iso, sha256_file, sha256_text
 from malapp.governance.datasets import read_json, validate_dataset_manifest
+from malapp.governance.leakage import require_training_clearance
 
 MODEL_REGISTRY_VERSION = 1
 VALID_CANDIDATE_STATES = frozenset(
@@ -66,8 +67,20 @@ def register_candidate(
     _validate_identifier(component, "component")
     if not artifact_manifests:
         raise PromotionError("at least one artifact manifest is required")
-    dataset = validate_dataset_manifest(dataset_manifest_path)["manifest"]
+    clearance = require_training_clearance(dataset_manifest_path)
+    dataset = validate_dataset_manifest(dataset_manifest_path, verify_sources=True)["manifest"]
     artifacts = [_artifact_reference(path) for path in artifact_manifests]
+    mismatched_artifacts = [
+        artifact["artifact_id"]
+        for artifact in artifacts
+        if artifact.get("dataset_version")
+        and artifact["dataset_version"] != dataset["dataset_id"]
+    ]
+    if mismatched_artifacts:
+        raise PromotionError(
+            "artifact dataset_version does not match candidate Dataset Manifest: "
+            + ", ".join(mismatched_artifacts)
+        )
 
     def mutate(registry: dict[str, Any]) -> dict[str, Any]:
         if candidate_id in registry["candidates"]:
@@ -82,8 +95,11 @@ def register_candidate(
             "artifacts": artifacts,
             "dataset": {
                 "dataset_id": dataset["dataset_id"],
-                "sha256": dataset["sha256"],
+                "manifest_sha256": dataset["sha256"],
                 "manifest_path": str(dataset_manifest_path.expanduser().resolve()),
+                "leakage_status": clearance["status"],
+                "leakage_audit_sha256": clearance["audit_sha256"],
+                "leakage_required_partitions": clearance["required_partitions"],
             },
             "metadata": dict(metadata or {}),
             "gate": None,
@@ -280,6 +296,7 @@ def _artifact_reference(path: Path) -> dict[str, Any]:
         "manifest_sha256": sha256_file(source),
         "manifest_size": source.stat().st_size,
         "declared_sha256": str(manifest.get("sha256") or ""),
+        "dataset_version": str(manifest.get("dataset_version") or manifest.get("dataset_id") or ""),
     }
 
 

@@ -155,7 +155,6 @@ data/exports/training_loop_YYYYMMDD_HHMMSS/
 
 ```bash
 python -m training.sft.train_policy \
-  data/exports/training_loop_YYYYMMDD_HHMMSS/policy_training.jsonl \
   --dataset-manifest training_artifacts/datasets/current/dataset-manifest.json
 ```
 

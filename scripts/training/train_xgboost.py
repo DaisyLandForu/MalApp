@@ -20,7 +20,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from malapp.governance.artifacts import build_xgboost_manifest  # noqa: E402
-from malapp.governance.leakage import require_training_clearance  # noqa: E402
+from malapp.governance.leakage import require_bound_training_sources  # noqa: E402
 from training.xgboost import pipeline as xp  # noqa: E402
 
 DEFAULT_OUT = ROOT / "training_artifacts" / "xgb_selected_20260616"
@@ -319,6 +319,7 @@ def write_manifest(
     out_dir: Path,
     thresholds: dict[str, Any],
     metrics: dict[str, Any],
+    dataset_version: str,
 ) -> None:
     manifest = build_xgboost_manifest(
         model_dir=out_dir / "models",
@@ -334,6 +335,7 @@ def write_manifest(
         ],
         thresholds=thresholds,
         metrics=metrics,
+        dataset_version=dataset_version,
         model_version="xgb-selected-v1",
     )
     (out_dir / "models" / "runtime_manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -379,7 +381,8 @@ def export_rows(out_dir: Path, heldout: list[dict[str, Any]], wec_rows: list[dic
     wb.save(out_dir / "test_set_for_app.xlsx")
 
 
-def train(paths: dict[str, Path], out_dir: Path) -> dict[str, Any]:
+def train(paths: dict[str, Path], out_dir: Path, dataset_manifest_path: Path) -> dict[str, Any]:
+    clearance = require_bound_training_sources(dataset_manifest_path, paths)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "models").mkdir(exist_ok=True)
     (out_dir / "curves").mkdir(exist_ok=True)
@@ -416,7 +419,7 @@ def train(paths: dict[str, Path], out_dir: Path) -> dict[str, Any]:
     report["thresholds"] = thresholds
     report["test"] = xp.evaluate_split(wec_rows, wec, wec_features, "test", thresholds)
     (out_dir / "models" / "thresholds.json").write_text(json.dumps(thresholds, ensure_ascii=False, indent=2), encoding="utf-8")
-    write_manifest(out_dir, thresholds, report)
+    write_manifest(out_dir, thresholds, report, clearance["audit"]["dataset_id"])
     export_rows(out_dir, heldout, wec_rows, wec, wec_features, thresholds)
     report["duration_seconds_total"] = round(time.perf_counter() - total_start, 3)
     (out_dir / "training_report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -432,14 +435,13 @@ def main() -> None:
     parser.add_argument("--out", default=str(DEFAULT_OUT))
     parser.add_argument("--dataset-manifest", required=True)
     args = parser.parse_args()
-    require_training_clearance(Path(args.dataset_manifest))
     paths = {
         "malicious": Path(args.malicious),
         "white": Path(args.white),
         "manual": Path(args.manual),
         "consensus": Path(args.consensus),
     }
-    report = train(paths, Path(args.out))
+    report = train(paths, Path(args.out), Path(args.dataset_manifest))
     print(json.dumps(report, ensure_ascii=False, indent=2))
 
 

@@ -9,7 +9,10 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from malapp.governance.artifacts import canonical_json, now_iso, sha256_text
-from malapp.governance.datasets import validate_dataset_manifest
+from malapp.governance.datasets import (
+    validate_dataset_manifest,
+    verify_bound_training_sources,
+)
 
 LEAKAGE_AUDIT_VERSION = 1
 LABEL_DERIVED_PATTERNS = (
@@ -34,6 +37,7 @@ def require_training_clearance(
     report = audit_dataset_manifest(
         manifest_path,
         required_partitions=required_partitions or {"train", "test"},
+        verify_sources=True,
     )
     if report_path:
         target = report_path.expanduser().resolve()
@@ -47,13 +51,28 @@ def require_training_clearance(
     return report
 
 
+def require_bound_training_sources(
+    manifest_path: Path,
+    actual_sources: dict[str, Path],
+    *,
+    required_partitions: set[str] | None = None,
+) -> dict[str, Any]:
+    audit = require_training_clearance(
+        manifest_path,
+        required_partitions=required_partitions,
+    )
+    sources = verify_bound_training_sources(manifest_path, actual_sources)
+    return {"audit": audit, "sources": sources}
+
+
 def audit_dataset_manifest(
     manifest_path: Path,
     *,
     reserved_sample_ids: set[str] | None = None,
     required_partitions: set[str] | None = None,
+    verify_sources: bool = True,
 ) -> dict[str, Any]:
-    validated = validate_dataset_manifest(manifest_path)
+    validated = validate_dataset_manifest(manifest_path, verify_sources=verify_sources)
     return audit_lineage_records(
         validated["records"],
         dataset_id=str(validated["manifest"]["dataset_id"]),

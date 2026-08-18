@@ -17,7 +17,7 @@ from malapp.governance.artifacts import (
     sha256_text,
 )
 
-DATASET_MANIFEST_VERSION = 1
+DATASET_MANIFEST_VERSION = 2
 DATASET_LINEAGE_VERSION = "malapp-dataset-lineage-v1"
 LABEL_TIERS = frozenset({"raw", "silver", "human_reviewed", "gold"})
 PARTITIONS = frozenset({"raw", "train", "dev", "test", "calibration", "challenge", "shadow"})
@@ -161,6 +161,7 @@ def build_dataset_manifest(
     *,
     dataset_name: str,
     inputs: dict[str, Path],
+    bound_sources: dict[str, Path] | None = None,
     output_dir: Path,
     dataset_version: str = "",
     git_commit: str = "",
@@ -185,6 +186,8 @@ def build_dataset_manifest(
         source_name = path.name
         source_entries.append(
             {
+                "kind": "partition_data",
+                "role": partition,
                 "partition": partition,
                 "name": source_name,
                 "path": str(path),
@@ -203,6 +206,24 @@ def build_dataset_manifest(
                     line_number=line_number,
                 )
             )
+    for role, raw_path in sorted((bound_sources or {}).items()):
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", role):
+            raise DatasetManifestError(f"invalid bound source role: {role!r}")
+        path = raw_path.expanduser().resolve()
+        if not path.is_file():
+            raise FileNotFoundError(f"bound training source does not exist: {path}")
+        source_entries.append(
+            {
+                "kind": "training_source",
+                "role": role,
+                "partition": "raw",
+                "name": path.name,
+                "path": str(path),
+                "sha256": sha256_file(path),
+                "size": path.stat().st_size,
+                "rows": None,
+            }
+        )
     if not lineage:
         raise DatasetManifestError("dataset contains no samples")
 
@@ -270,6 +291,21 @@ def validate_dataset_manifest(
         raise DatasetManifestError(f"unsupported dataset manifest version: {manifest['manifest_version']}")
     if manifest["schema_version"] != DATASET_LINEAGE_VERSION:
         raise DatasetManifestError(f"unsupported dataset lineage schema: {manifest['schema_version']}")
+    sources = manifest.get("sources")
+    if not isinstance(sources, list) or not sources:
+        raise DatasetManifestError("dataset manifest sources must be a non-empty list")
+    roles: set[tuple[str, str]] = set()
+    for entry in sources:
+        if not isinstance(entry, dict):
+            raise DatasetManifestError("dataset source entries must be objects")
+        kind = str(entry.get("kind") or "")
+        role = str(entry.get("role") or "")
+        if kind not in {"partition_data", "training_source"} or not role:
+            raise DatasetManifestError("dataset source kind and role are required")
+        identity = (kind, role)
+        if identity in roles:
+            raise DatasetManifestError(f"duplicate dataset source role: {kind}:{role}")
+        roles.add(identity)
 
     content_identity = {
         "manifest_version": manifest["manifest_version"],
@@ -311,8 +347,59 @@ def validate_dataset_manifest(
     return {"manifest": manifest, "lineage_path": lineage_path, "records": rows}
 
 
+def resolve_partition_sources(
+    manifest_path: Path,
+    *,
+    required_partitions: set[str],
+) -> dict[str, Path]:
+    validated = validate_dataset_manifest(manifest_path, verify_sources=True)
+    result: dict[str, Path] = {}
+    for raw_partition in required_partitions:
+        partition = normalize_partition(raw_partition)
+        matches = [
+            entry
+            for entry in validated["manifest"]["sources"]
+            if entry.get("kind") == "partition_data" and entry.get("partition") == partition
+        ]
+        if len(matches) != 1:
+            raise DatasetManifestError(
+                f"exactly one governed partition source is required for {partition}; found {len(matches)}"
+            )
+        result[partition] = Path(matches[0]["path"]).expanduser().resolve()
+    return result
+
+
+def verify_bound_training_sources(
+    manifest_path: Path,
+    actual_sources: dict[str, Path],
+) -> dict[str, dict[str, Any]]:
+    if not actual_sources:
+        raise DatasetManifestError("at least one actual training source is required")
+    validated = validate_dataset_manifest(manifest_path, verify_sources=True)
+    declared = {
+        str(entry["role"]): entry
+        for entry in validated["manifest"]["sources"]
+        if entry.get("kind") == "training_source"
+    }
+    result: dict[str, dict[str, Any]] = {}
+    for role, raw_path in actual_sources.items():
+        entry = declared.get(role)
+        if entry is None:
+            raise DatasetIntegrityError(f"actual training source is not declared by Manifest: {role}")
+        path = raw_path.expanduser().resolve()
+        if not path.is_file():
+            raise FileNotFoundError(f"actual training source does not exist: {path}")
+        digest = sha256_file(path)
+        if digest != entry.get("sha256") or path.stat().st_size != int(entry.get("size", -1)):
+            raise DatasetIntegrityError(f"actual training source does not match Manifest: {role}")
+        result[role] = {**entry, "actual_path": str(path)}
+    return result
+
+
 def _portable_source(entry: dict[str, Any]) -> dict[str, Any]:
     return {
+        "kind": entry["kind"],
+        "role": entry["role"],
         "partition": entry["partition"],
         "name": entry["name"],
         "path": entry["path"],
@@ -324,6 +411,8 @@ def _portable_source(entry: dict[str, Any]) -> dict[str, Any]:
 
 def _source_identity(entry: dict[str, Any]) -> dict[str, Any]:
     return {
+        "kind": entry["kind"],
+        "role": entry["role"],
         "partition": entry["partition"],
         "name": entry["name"],
         "sha256": entry["sha256"],

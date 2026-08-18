@@ -44,6 +44,19 @@ def parse_inputs(values: list[str]) -> dict[str, Path]:
     return result
 
 
+def parse_sources(values: list[str]) -> dict[str, Path]:
+    result: dict[str, Path] = {}
+    for value in values:
+        role, separator, path = value.partition("=")
+        if not separator or not role.strip() or not path.strip():
+            raise ValueError(f"bound source must use role=path: {value}")
+        clean_role = role.strip()
+        if clean_role in result:
+            raise ValueError(f"duplicate bound source role: {clean_role}")
+        result[clean_role] = Path(path.strip())
+    return result
+
+
 def load_reserved_ids(paths: list[str]) -> set[str]:
     result: set[str] = set()
     for raw_path in paths:
@@ -66,6 +79,7 @@ def cmd_dataset_build(args: argparse.Namespace) -> None:
         dataset_name=args.name,
         dataset_version=args.version,
         inputs=parse_inputs(args.input),
+        bound_sources=parse_sources(args.source),
         output_dir=Path(args.output_dir),
     )
     print_json(result)
@@ -181,6 +195,7 @@ def build_parser() -> argparse.ArgumentParser:
     dataset.add_argument("--name", required=True)
     dataset.add_argument("--version", default="")
     dataset.add_argument("--input", action="append", required=True, help="partition=JSONL_PATH")
+    dataset.add_argument("--source", action="append", default=[], help="role=ACTUAL_TRAINING_FILE")
     dataset.add_argument("--output-dir", required=True)
     dataset.set_defaults(handler=cmd_dataset_build)
 

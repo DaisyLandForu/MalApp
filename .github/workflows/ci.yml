@@ -31,6 +31,7 @@ jobs:
             --name ci-governance-fixture \
             --input train=tests/fixtures/governance/train.jsonl \
             --input test=tests/fixtures/governance/test.jsonl \
+            --source training_fixture=tests/fixtures/evaluation/candidate-scorecard.json \
             --output-dir /tmp/malapp-governed-dataset
           python -m scripts.governance.manage dataset-validate \
             --manifest /tmp/malapp-governed-dataset/dataset-manifest.json \

@@ -51,7 +51,7 @@ tests/                单元与集成测试
 
 ## Quick start
 
-推荐 Python 3.11 或 3.12：
+CI 与生产验收支持 Python 3.11/3.12；Python 3.13/3.14 暂不作为验收环境：
 
 ```bash
 python -m venv .venv
@@ -138,8 +138,8 @@ python -m scripts.rag.build_index --help
 python -m scripts.evaluation.run_evaluation --help
 python -m scripts.evaluation.run_five_layer --help
 python -m scripts.evaluation.run_evaluation gate \
-  outputs/approved-baseline-scorecard.json \
-  outputs/candidate-scorecard.json \
+  --baseline outputs/approved-baseline-scorecard.json \
+  --candidate outputs/candidate-scorecard.json \
   --output outputs/candidate-gate-report.json
 python -m scripts.training.build_corpora --help
 ```

@@ -19,11 +19,12 @@ jobs:
       - run: python -m ruff check apps malapp integrations training scripts tests
       - run: python -m compileall -q apps malapp integrations training scripts
       - run: python -m pytest
-      - name: Regression gate contract
-        run: >-
-          python -m scripts.evaluation.run_evaluation gate
-          tests/fixtures/evaluation/approved-baseline-scorecard.json
-          tests/fixtures/evaluation/candidate-scorecard.json
+      - name: Regression gate self-test
+        run: |
+          python scripts/evaluation/run_evaluation.py gate \
+            --baseline tests/fixtures/evaluation/approved-baseline-scorecard.json \
+            --candidate tests/fixtures/evaluation/candidate-scorecard.json \
+            --output /tmp/regression-gate.json
       - run: docker compose config
 
   docker:

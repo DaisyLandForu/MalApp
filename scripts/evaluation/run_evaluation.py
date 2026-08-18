@@ -220,8 +220,12 @@ def cmd_compare(args: argparse.Namespace) -> None:
 
 
 def cmd_gate(args: argparse.Namespace) -> None:
-    baseline = load_scorecard(Path(args.baseline))
-    candidate = load_scorecard(Path(args.candidate))
+    baseline_path = args.baseline_option or args.baseline
+    candidate_path = args.candidate_option or args.candidate
+    if not baseline_path or not candidate_path:
+        raise ValueError("gate requires --baseline and --candidate scorecards")
+    baseline = load_scorecard(Path(baseline_path))
+    candidate = load_scorecard(Path(candidate_path))
     policy = load_gate_policy(Path(args.policy)) if args.policy else load_gate_policy()
     result = evaluate_regression_gate(baseline, candidate, policy)
     if args.output:
@@ -724,8 +728,20 @@ def parser() -> argparse.ArgumentParser:
         "gate",
         help="enforce release regression gates against an approved baseline",
     )
-    gate.add_argument("baseline", help="approved baseline scorecard JSON")
-    gate.add_argument("candidate", help="candidate scorecard JSON")
+    gate.add_argument("baseline", nargs="?", help="approved baseline scorecard JSON")
+    gate.add_argument("candidate", nargs="?", help="candidate scorecard JSON")
+    gate.add_argument(
+        "--baseline",
+        dest="baseline_option",
+        default="",
+        help="approved baseline scorecard JSON",
+    )
+    gate.add_argument(
+        "--candidate",
+        dest="candidate_option",
+        default="",
+        help="candidate scorecard JSON",
+    )
     gate.add_argument("--policy", default="", help="optional regression gate policy JSON")
     gate.add_argument("--output", default="", help="write the signed gate report JSON")
     gate.set_defaults(func=cmd_gate)

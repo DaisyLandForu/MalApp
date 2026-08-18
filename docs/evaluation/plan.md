@@ -417,8 +417,8 @@ python scripts\evaluation\run_evaluation.py run `
 
 ```powershell
 python -m scripts.evaluation.run_evaluation gate `
-  outputs\approved-baseline-scorecard.json `
-  outputs\candidate-scorecard.json `
+  --baseline outputs\approved-baseline-scorecard.json `
+  --candidate outputs\candidate-scorecard.json `
   --output outputs\candidate-gate-report.json
 ```
 

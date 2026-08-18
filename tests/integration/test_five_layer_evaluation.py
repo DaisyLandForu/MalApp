@@ -553,6 +553,8 @@ class FiveLayerEvaluationTest(unittest.TestCase):
             "model_release": 1,
             "rag_compare": 3,
             "agent_ablation": 5,
+            "debate_ablation": 4,
+            "xgb_ablation": 4,
             "complete_release": 1,
             "production_reliability": 2,
         }
@@ -575,6 +577,20 @@ class FiveLayerEvaluationTest(unittest.TestCase):
             job_id="test-job",
         )
         self.assertIn("--pending-only", pending[0]["args"])
+        debate = build_commands(
+            "debate_ablation", manifest=manifest, data_dir=data_dir, job_id="test-job"
+        )
+        self.assertEqual(
+            ["no_debate", "single_model", "verification", "full"],
+            [item["args"][item["args"].index("--debate-mode") + 1] for item in debate],
+        )
+        xgb = build_commands(
+            "xgb_ablation", manifest=manifest, data_dir=data_dir, job_id="test-job"
+        )
+        self.assertEqual(
+            ["off", "agent_only", "fusion", "full"],
+            [item["args"][item["args"].index("--xgb-mode") + 1] for item in xgb],
+        )
 
     def test_workflow_batch_limits_accumulate_and_preserve_replay(self) -> None:
         data_dir = self.root / "data-batches"
@@ -606,6 +622,8 @@ class FiveLayerEvaluationTest(unittest.TestCase):
             "model_release",
             "rag_compare",
             "agent_ablation",
+            "debate_ablation",
+            "xgb_ablation",
             "complete_release",
         ):
             commands = build_commands(
@@ -636,6 +654,8 @@ class FiveLayerEvaluationTest(unittest.TestCase):
             30,
             workflow_dataset_total("production_reliability", manifest),
         )
+        self.assertEqual(30, workflow_dataset_total("debate_ablation", manifest))
+        self.assertEqual(30, workflow_dataset_total("xgb_ablation", manifest))
         reliability_custom = build_commands(
             "production_reliability",
             manifest=manifest,

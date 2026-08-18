@@ -1,0 +1,47 @@
+{
+  "policy_id": "malapp-release-regression-gate",
+  "version": "1.0.0",
+  "comparability": {
+    "require_same_validation_sha256": true,
+    "require_same_validation_total": true,
+    "require_same_evaluated_total": true,
+    "minimum_candidate_coverage": 1.0
+  },
+  "gates": [
+    {
+      "id": "malicious_recall_not_below_baseline",
+      "metric": "malicious_recall",
+      "operator": "gte_baseline",
+      "tolerance": 0.0,
+      "description": "Malicious recall cannot regress below the approved baseline."
+    },
+    {
+      "id": "benign_fpr_no_significant_increase",
+      "metric": "benign_false_positive_rate",
+      "operator": "lte_baseline_delta",
+      "max_delta": 0.005,
+      "description": "Benign false-positive rate may increase by at most 0.5 percentage points."
+    },
+    {
+      "id": "structured_output_success",
+      "metric": "structure_success_rate",
+      "operator": "gte",
+      "value": 0.995,
+      "description": "Structured output success rate must be at least 99.5%."
+    },
+    {
+      "id": "high_confidence_errors_not_increase",
+      "metric": "high_confidence_error_count",
+      "operator": "lte_baseline",
+      "tolerance": 0.0,
+      "description": "High-confidence errors cannot increase."
+    },
+    {
+      "id": "wrong_rag_citations_not_increase",
+      "metric": "human_review.wrong_rag_citation_count",
+      "operator": "lte_baseline",
+      "tolerance": 0.0,
+      "description": "Human-confirmed wrong RAG citations cannot increase."
+    }
+  ]
+}

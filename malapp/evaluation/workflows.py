@@ -64,6 +64,24 @@ WORKFLOW_CATALOG: dict[str, dict[str, Any]] = {
         "default_batch_size": 10,
         "variant_count": 5,
     },
+    "debate_ablation": {
+        "layer": "layer4_e2e",
+        "name": "运行辩论模式消融",
+        "description": "比较无辩论、单模型、短验证与完整双模型辩论四种路径。",
+        "automatic": True,
+        "estimated_model_calls": 0,
+        "default_batch_size": 10,
+        "variant_count": 4,
+    },
+    "xgb_ablation": {
+        "layer": "layer4_e2e",
+        "name": "运行XGBoost消融",
+        "description": "比较无XGBoost、仅Agent先验、仅融合与完整系统四种路径。",
+        "automatic": True,
+        "estimated_model_calls": 0,
+        "default_batch_size": 10,
+        "variant_count": 4,
+    },
     "complete_release": {
         "layer": "layer4_e2e",
         "name": "补跑严格集未完成样本",
@@ -100,7 +118,7 @@ def workflow_dataset_total(action: str, manifest: dict[str, Any]) -> int:
         return int(((counts.get("layer2_rag") or {}).get("rag_retrieval_eval")) or 0)
     if action == "agent_ablation":
         return int(((counts.get("layer3_agent") or {}).get("agent_ablation_eval")) or 0)
-    if action == "production_reliability":
+    if action in {"production_reliability", "debate_ablation", "xgb_ablation"}:
         return int(
             ((counts.get("layer4_e2e") or {}).get("end_to_end_challenge_eval")) or 0
         )
@@ -124,6 +142,16 @@ def workflow_run_ids(action: str, suite_id: str) -> list[str]:
                 "no-impersonation",
                 "no-business_label",
             )
+        ]
+    if action == "debate_ablation":
+        return [
+            f"{suite_id}-{variant}"
+            for variant in ("debate_none", "debate_single", "debate_short", "debate_full")
+        ]
+    if action == "xgb_ablation":
+        return [
+            f"{suite_id}-{variant}"
+            for variant in ("xgb_off", "xgb_agent_only", "xgb_fusion", "xgb_full")
         ]
     if action == "production_reliability":
         return [f"{suite_id}-fault-recovery"]
@@ -299,7 +327,7 @@ def workflow_sample_file(action: str, suite_dir: Path) -> Path:
         return suite_dir / "layer2_rag" / "rag_retrieval_eval.jsonl"
     if action == "agent_ablation":
         return suite_dir / "layer3_agent" / "agent_ablation_eval.jsonl"
-    if action == "production_reliability":
+    if action in {"production_reliability", "debate_ablation", "xgb_ablation"}:
         return suite_dir / "layer4_e2e" / "end_to_end_challenge_eval.jsonl"
     raise ValueError(f"unsupported five-layer workflow: {action}")
 
@@ -478,6 +506,8 @@ def workflow_overview(
     catalog["complete_release"]["estimated_model_calls"] = release_count
     catalog["rag_compare"]["estimated_model_calls"] = rag_count * 3
     catalog["agent_ablation"]["estimated_model_calls"] = ablation_count * 5
+    catalog["debate_ablation"]["estimated_model_calls"] = challenge_count * 4
+    catalog["xgb_ablation"]["estimated_model_calls"] = challenge_count * 4
     catalog["production_reliability"]["estimated_model_calls"] = challenge_count
     for action, definition in catalog.items():
         total = workflow_dataset_total(action, manifest)
@@ -529,6 +559,8 @@ def command(
     next_unfinished: bool = False,
     replay_last_selection: bool = False,
     disabled_agent: str = "",
+    debate_mode: str = "",
+    xgb_mode: str = "",
 ) -> list[str]:
     args = [
         "--validation-csv",
@@ -557,6 +589,10 @@ def command(
         args.append("--replay-last-selection")
     if disabled_agent:
         args.extend(["--disabled-agent", disabled_agent])
+    if debate_mode:
+        args.extend(["--debate-mode", debate_mode])
+    if xgb_mode:
+        args.extend(["--xgb-mode", xgb_mode])
     return args
 
 
@@ -608,7 +644,7 @@ def build_commands(
         required.append(rag_file)
     elif action == "agent_ablation":
         required.append(ablation_file)
-    elif action == "production_reliability":
+    elif action in {"production_reliability", "debate_ablation", "xgb_ablation"}:
         required.append(challenge_file)
     missing = [str(path) for path in required if not path.exists()]
     if missing:
@@ -730,6 +766,54 @@ def build_commands(
                 ),
             )
             for disabled, label in variants
+        ]
+    if action == "debate_ablation":
+        return [
+            entry(
+                label,
+                command(
+                    validation_csv=validation_csv,
+                    output_root=output_root,
+                    source_data_dir=data_dir,
+                    run_id=f"{suite_id}-{variant}",
+                    variant=variant,
+                    sample_id_file=challenge_file,
+                    isolation_sample_id_file=challenge_isolation_file,
+                    limit=batch_limit(challenge_limit),
+                    next_unfinished=True,
+                    debate_mode=mode,
+                ),
+            )
+            for variant, mode, label in (
+                ("debate_none", "no_debate", "无辩论"),
+                ("debate_single", "single_model", "单模型"),
+                ("debate_short", "verification", "短验证"),
+                ("debate_full", "full", "完整辩论"),
+            )
+        ]
+    if action == "xgb_ablation":
+        return [
+            entry(
+                label,
+                command(
+                    validation_csv=validation_csv,
+                    output_root=output_root,
+                    source_data_dir=data_dir,
+                    run_id=f"{suite_id}-{variant}",
+                    variant=variant,
+                    sample_id_file=challenge_file,
+                    isolation_sample_id_file=challenge_isolation_file,
+                    limit=batch_limit(challenge_limit),
+                    next_unfinished=True,
+                    xgb_mode=mode,
+                ),
+            )
+            for variant, mode, label in (
+                ("xgb_off", "off", "无XGBoost"),
+                ("xgb_agent_only", "agent_only", "仅Agent先验"),
+                ("xgb_fusion", "fusion", "仅最终融合"),
+                ("xgb_full", "full", "完整XGBoost"),
+            )
         ]
     if action == "production_reliability":
         run_id = f"{suite_id}-fault-recovery"

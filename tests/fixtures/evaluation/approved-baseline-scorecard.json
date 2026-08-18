@@ -1,0 +1,17 @@
+{
+  "generated_at": "2026-08-18T00:00:00+00:00",
+  "validation_csv": "tests/fixtures/evaluation/ci-frozen-benchmark.csv",
+  "validation_sha256": "ci-frozen-benchmark-v1",
+  "metrics": {
+    "validation_total": 20,
+    "evaluated_total": 20,
+    "coverage": 1.0,
+    "malicious_recall": 1.0,
+    "benign_false_positive_rate": 0.0,
+    "structure_success_rate": 1.0,
+    "high_confidence_error_count": 0,
+    "human_review": {
+      "wrong_rag_citation_count": 0
+    }
+  }
+}

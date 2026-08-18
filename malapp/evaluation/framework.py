@@ -356,6 +356,9 @@ def build_scorecard(
     latencies: list[float] = []
     calibration: list[tuple[int, float]] = []
     error_counts: Counter[str] = Counter()
+    high_confidence_errors = 0
+    rag_citation_reviews = 0
+    wrong_rag_citations = 0
     reviewed_reports = 0
     review_quality: dict[str, list[bool]] = {
         "evidence_supported": [],
@@ -388,17 +391,40 @@ def build_scorecard(
             latencies.append(latency)
         probability = _as_float((report.get("decision") or {}).get("final_score"))
         if probability is not None:
-            calibration.append((1 if gold == "malicious" else 0, min(1.0, max(0.0, probability))))
+            probability = min(1.0, max(0.0, probability))
+            calibration.append((1 if gold == "malicious" else 0, probability))
+            high_confidence_errors += int(
+                (gold == "malicious" and verdict == "benign" and probability <= 0.10)
+                or (gold == "benign" and verdict == "malicious" and probability >= 0.90)
+            )
         error_counts.update(infer_error_types(gold, report))
         review_payload = reviews_by_report.get(_clean(report.get("report_id")))
         if not review_payload:
             review_payload = reviews_by_sample.get(row["_row_id"])
         if review_payload:
             reviewed_reports += 1
+            review_error_types = {
+                _clean(value).lower()
+                for value in review_payload.get("error_types") or []
+                if _clean(value).lower() in ERROR_TYPES
+            }
+            error_counts.update(review_error_types)
             for field in review_quality:
                 value = review_payload.get(field)
                 if isinstance(value, bool):
                     review_quality[field].append(value)
+            rag_enabled = bool(
+                ((report.get("evidence_layers") or {}).get("rag_context") or {}).get(
+                    "enabled"
+                )
+            )
+            evidence_supported = review_payload.get("evidence_supported")
+            if rag_enabled and isinstance(evidence_supported, bool):
+                rag_citation_reviews += 1
+                wrong_rag_citations += int(
+                    not evidence_supported
+                    or bool(review_error_types.intersection({"wrong_evidence", "hallucination"}))
+                )
 
     tp = confusion["malicious"]["malicious"]
     fn = confusion["malicious"]["benign"]
@@ -425,6 +451,8 @@ def build_scorecard(
         "review_rate": _safe_div(review, evaluated),
         "structure_success_rate": _safe_div(structure_valid, evaluated),
         "invalid_fallback_rate": _safe_div(invalid_fallback, evaluated),
+        "high_confidence_error_count": high_confidence_errors,
+        "high_confidence_error_rate": _safe_div(high_confidence_errors, evaluated),
         "human_review": {
             "reviewed_reports": reviewed_reports,
             "evidence_supported_count": len(review_quality["evidence_supported"]),
@@ -445,6 +473,11 @@ def build_scorecard(
             "hallucination_rate": _safe_div(
                 sum(review_quality["hallucination"]),
                 len(review_quality["hallucination"]),
+            ),
+            "rag_citation_review_count": rag_citation_reviews,
+            "wrong_rag_citation_count": wrong_rag_citations,
+            "wrong_rag_citation_rate": _safe_div(
+                wrong_rag_citations, rag_citation_reviews
             ),
         },
         "latency_ms": {
@@ -963,6 +996,38 @@ def evaluation_plan() -> dict[str, Any]:
             "verification": {
                 "description": "XGBoost-guided short model verification",
                 "sample_overrides": {"evaluation_config": {"debate_mode": "verification"}},
+            },
+            "debate_none": {
+                "description": "Agent evidence decision without an LLM debate",
+                "sample_overrides": {"evaluation_config": {"debate_mode": "no_debate"}},
+            },
+            "debate_single": {
+                "description": "One independent model judgement without cross-examination",
+                "sample_overrides": {"evaluation_config": {"debate_mode": "single_model"}},
+            },
+            "debate_short": {
+                "description": "Short XGBoost-guided dual-model verification",
+                "sample_overrides": {"evaluation_config": {"debate_mode": "verification"}},
+            },
+            "debate_full": {
+                "description": "Full dual-model debate",
+                "sample_overrides": {"evaluation_config": {"debate_mode": "full"}},
+            },
+            "xgb_off": {
+                "description": "Disable all XGBoost inference and priors",
+                "sample_overrides": {"evaluation_config": {"xgb_mode": "off"}},
+            },
+            "xgb_agent_only": {
+                "description": "Expose XGBoost domain priors to Agents only",
+                "sample_overrides": {"evaluation_config": {"xgb_mode": "agent_only"}},
+            },
+            "xgb_fusion": {
+                "description": "Use XGBoost only in final fusion without Agent priors",
+                "sample_overrides": {"evaluation_config": {"xgb_mode": "fusion"}},
+            },
+            "xgb_full": {
+                "description": "Use XGBoost Agent priors and final fusion",
+                "sample_overrides": {"evaluation_config": {"xgb_mode": "full"}},
             },
             "rag_off": {
                 "description": "Disable RAG but keep the remaining pipeline",

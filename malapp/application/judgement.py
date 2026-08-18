@@ -1389,6 +1389,13 @@ def execute_judgement(raw_sample: dict[str, Any], *, entrypoint: str = "internal
             if isinstance(raw_sample.get("evaluation_config"), dict)
             else {}
         )
+        evaluation_variant = os.getenv("MALAPP_EVAL_VARIANT", "production").strip()
+        if evaluation_config and (
+            entrypoint != "internal" or evaluation_variant in {"", "production"}
+        ):
+            raise ValueError(
+                "evaluation_config is restricted to the isolated evaluation runner"
+            )
         md5 = str(raw_sample.get("md5") or raw_sample.get("sample_id") or "").upper().strip()
         if md5:
             feature_context = load_feature_context(md5)
@@ -1485,8 +1492,18 @@ def execute_judgement(raw_sample: dict[str, Any], *, entrypoint: str = "internal
 
     cache_sample = dict(normalized)
     cached = get_cached_report(cache_sample)
+    xgb_mode = str(evaluation_config.get("xgb_mode") or "full").strip().lower()
+    xgb_mode = {
+        "none": "off",
+        "no_xgb": "off",
+        "agent": "agent_only",
+        "agent_xgb_only": "agent_only",
+        "fusion_only": "fusion",
+    }.get(xgb_mode, xgb_mode)
+    if xgb_mode not in {"off", "agent_only", "fusion", "full"}:
+        raise ValueError(f"unsupported evaluation xgb_mode: {xgb_mode}")
     has_valid_md5_for_xgb = valid_md5(normalized.get("md5") or normalized.get("sample_id"))
-    xgb_cache_required = has_valid_md5_for_xgb and str(os.getenv("MALAPP_USE_XGB", "1")).lower() in {
+    xgb_cache_required = xgb_mode != "off" and has_valid_md5_for_xgb and str(os.getenv("MALAPP_USE_XGB", "1")).lower() in {
         "1",
         "true",
         "yes",
@@ -1603,22 +1620,26 @@ def execute_judgement(raw_sample: dict[str, Any], *, entrypoint: str = "internal
 
     pipeline.start("XGB_INFERENCE", {"sample_id": normalized["sample_id"], "md5": normalized.get("md5")})
     xgb_result = None
-    try:
-        from malapp.inference.xgboost import predict as predict_xgb
+    if xgb_mode == "off":
+        pipeline.skip("XGB_INFERENCE", "evaluation_xgb_off")
+    else:
+        try:
+            from malapp.inference.xgboost import predict as predict_xgb
 
-        xgb_result = predict_xgb(normalized)
-        if xgb_result is None:
-            pipeline.skip("XGB_INFERENCE", "xgboost_unavailable_or_disabled")
-        else:
-            pipeline.complete(
-                "XGB_INFERENCE",
-                {"verdict": xgb_result.get("verdict")},
-                output_data=xgb_result,
-            )
-    except Exception as exc:
-        pipeline.degrade("XGB_INFERENCE", ["xgboost_inference_failed"], {"error": str(exc)})
-    if valid_md5(normalized.get("md5")):
+            xgb_result = predict_xgb(normalized)
+            if xgb_result is None:
+                pipeline.skip("XGB_INFERENCE", "xgboost_unavailable_or_disabled")
+            else:
+                pipeline.complete(
+                    "XGB_INFERENCE",
+                    {"verdict": xgb_result.get("verdict"), "evaluation_mode": xgb_mode},
+                    output_data=xgb_result,
+                )
+        except Exception as exc:
+            pipeline.degrade("XGB_INFERENCE", ["xgboost_inference_failed"], {"error": str(exc)})
+    if xgb_mode in {"agent_only", "full"} and valid_md5(normalized.get("md5")):
         evidence_blocks = apply_xgb_agent_scores(evidence_blocks, xgb_result)
+    xgb_for_fusion = xgb_result if xgb_mode in {"fusion", "full"} else None
     evidence_blocks = add_evidence_conflict_markers(evidence_blocks)
     structured_evidence_layer = build_structured_evidence_layer(evidence_blocks)
     from malapp.agents.evidence_contract import build_evidence_envelope
@@ -1635,8 +1656,8 @@ def execute_judgement(raw_sample: dict[str, Any], *, entrypoint: str = "internal
     # build_provider accepts only a non-production rule fixture from this
     # object; endpoints and credentials remain deployment-only configuration.
     debate_evidence: list[Any] = list(evidence_blocks)
-    if xgb_result:
-        debate_config["xgb_prior"] = xgb_result
+    if xgb_for_fusion:
+        debate_config["xgb_prior"] = xgb_for_fusion
     debate_config["rag_context"] = rag_context
     debate_config["sample_id"] = normalized["sample_id"]
     debate_config["run_id"] = run_id
@@ -1656,6 +1677,7 @@ def execute_judgement(raw_sample: dict[str, Any], *, entrypoint: str = "internal
     # the shorter XGBoost-guided verification path without changing production
     # behaviour or embedding experiment controls in model prompts.
     debate_mode = str(evaluation_config.get("debate_mode") or "full").strip().lower()
+    debate_config["evaluation_mode"] = debate_mode
     debate_config["verification_mode"] = debate_mode in {
         "verification",
         "short",
@@ -1697,7 +1719,8 @@ def execute_judgement(raw_sample: dict[str, Any], *, entrypoint: str = "internal
             debate_result,
             evidence_blocks,
             normalized.get("decision_params") if isinstance(normalized.get("decision_params"), dict) else None,
-            xgb_result=xgb_result,
+            xgb_result=xgb_for_fusion,
+            auto_predict_xgb=False,
         )
         decision = apply_degradation_policy(decision, degradation_policy)
         if degradation_policy["status"] == "degraded":

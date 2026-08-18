@@ -8,6 +8,8 @@ from fastapi.testclient import TestClient
 
 from apps.server.app import create_app
 from apps.server.config import ServerConfig, load_server_config
+from malapp.application.contracts import JudgementRequest
+from malapp.application.service import JudgementService
 
 
 class ApiSecurityTest(unittest.TestCase):
@@ -119,6 +121,17 @@ class ApiSecurityTest(unittest.TestCase):
     def test_production_without_api_key_fails_fast(self) -> None:
         with self.assertRaisesRegex(ValueError, "MALAPP_API_KEY"):
             load_server_config({"MALAPP_PROFILE": "production"})
+
+    def test_transport_cannot_inject_evaluation_ablation_controls(self) -> None:
+        request = JudgementRequest.from_payload(
+            {
+                "sample_id": "evaluation-injection",
+                "evaluation_config": {"debate_mode": "no_debate", "xgb_mode": "off"},
+            },
+            source="web_api",
+        )
+        with self.assertRaisesRegex(ValueError, "isolated evaluation runner"):
+            JudgementService().judge(request)
 
 
 if __name__ == "__main__":

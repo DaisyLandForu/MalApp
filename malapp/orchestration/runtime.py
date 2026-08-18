@@ -199,7 +199,15 @@ def run_with_retries(
             events.append(runtime_event(agent.name, "attempt", "completed", f"attempt {attempt} completed", context.request_id))
             return result, events
         except Exception as exc:
-            events.append(runtime_event(agent.name, "attempt", "failed", f"attempt {attempt}: {exc}", context.request_id))
+            events.append(
+                runtime_event(
+                    agent.name,
+                    "attempt",
+                    "failed",
+                    f"attempt {attempt}: {type(exc).__name__}: {exc}",
+                    context.request_id,
+                )
+            )
             if attempt > policy.max_retries:
                 timed_out = isinstance(exc, TimeoutError)
                 result = degraded_result(
@@ -220,6 +228,11 @@ def inject_fault(agent_name: str, fault: dict[str, Any]) -> None:
     failures_left = bounded_int(fault.get("failures"), 0, 0, 100)
     if failures_left:
         fault["failures"] = failures_left - 1
+        mode = str(fault.get("mode") or "transient_failure").strip().lower()
+        if mode == "timeout":
+            raise TimeoutError(f"simulated {agent_name} timeout")
+        if mode == "invalid_schema":
+            raise ValueError(f"simulated {agent_name} invalid schema")
         raise RuntimeError(f"simulated {agent_name} failure")
 
 

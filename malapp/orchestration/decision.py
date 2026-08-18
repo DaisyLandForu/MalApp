@@ -46,6 +46,8 @@ def collaborative_decision(
     evidence_blocks: list[Any],
     runtime_params: dict[str, Any] | None = None,
     xgb_result: dict[str, Any] | None = None,
+    *,
+    auto_predict_xgb: bool = True,
 ) -> dict[str, Any]:
     params = load_decision_params()
     if runtime_params:
@@ -56,7 +58,7 @@ def collaborative_decision(
     if missing:
         raise ValueError("missing upstream engine scores: " + ", ".join(missing))
     score_c_raw = normalize_engine_score(debate_report.get("arbiter", {}).get("score", 0.5))
-    if xgb_result is None:
+    if xgb_result is None and auto_predict_xgb:
         try:
             from malapp.inference.xgboost import predict as predict_xgb
 

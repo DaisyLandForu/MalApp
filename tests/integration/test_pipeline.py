@@ -1,5 +1,6 @@
 import base64
 import io
+import os
 import unittest
 import zipfile
 from unittest.mock import patch
@@ -255,6 +256,58 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual("insufficient_evidence", updated.status)
         self.assertIn("无法可靠判断", updated.claim)
         self.assertEqual("model_prior", updated.evidence_items[-1]["direction"])
+
+    def test_agent_only_xgb_ablation_excludes_final_fusion_prior(self):
+        xgb_result = {
+            "enabled": True,
+            "version": "test",
+            "probability": 0.91,
+            "verdict": "malicious",
+            "agent_scores": {
+                "static_analysis": 0.81,
+                "threat_intel": 0.82,
+                "impersonation": 0.83,
+                "business_label": 0.84,
+            },
+            "engine_scores": {"engine_a": 0.2, "engine_b": 0.8, "engine_c": 0.9},
+            "thresholds": {"benign_threshold": 0.16, "malicious_threshold": 0.82},
+        }
+        debate_result = {
+            "execution_mode": "full_debate",
+            "debate_conformance": "evaluation-fixture",
+            "debate_rounds": 1,
+            "model_a": {"score": 0.7, "verdict": "suspicious", "confidence": 0.7},
+            "model_b": {"score": 0.7, "verdict": "suspicious", "confidence": 0.7},
+            "arbiter": {"score": 0.7, "verdict": "suspicious", "rationale": "fixture"},
+            "stages": [],
+            "model_calls": [],
+            "providers": {},
+        }
+        with (
+            patch.dict(
+                os.environ,
+                {"MALAPP_USE_XGB": "1", "MALAPP_EVAL_VARIANT": "xgb_agent_only"},
+            ),
+            patch("malapp.data_import.preprocess.get_cached_report", return_value=None),
+            patch("malapp.data_import.preprocess.get_latest_cached_report_by_md5", return_value=None),
+            patch("malapp.inference.xgboost.predict", return_value=xgb_result),
+            patch("malapp.application.judgement.debate", return_value=debate_result) as debate_mock,
+        ):
+            report = judge(
+                {
+                    "md5": "2" * 32,
+                    "sample_id": "2" * 32,
+                    "engine_a_score": 20,
+                    "engine_b_score": 80,
+                    "evaluation_config": {"xgb_mode": "agent_only"},
+                }
+            )
+
+        evidence, config = debate_mock.call_args.args
+        self.assertNotIn("xgb_prior", config)
+        self.assertTrue(all(block.ml_prior is not None for block in evidence))
+        self.assertIsNone(report["decision"]["xgb"])
+        self.assertEqual("agent_only", report["execution"]["evaluation_config"]["xgb_mode"])
 
     def test_component_disagreement_requests_review_without_overriding_wec(self):
         blocks = [

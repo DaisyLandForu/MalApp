@@ -41,6 +41,11 @@ from malapp.evaluation.framework import (  # noqa: E402
     load_reports,
     load_validation_rows,
 )
+from malapp.evaluation.gates import (  # noqa: E402
+    evaluate_regression_gate,
+    load_gate_policy,
+    load_scorecard,
+)
 
 
 def now_iso() -> str:
@@ -214,6 +219,18 @@ def cmd_compare(args: argparse.Namespace) -> None:
     print_json(result)
 
 
+def cmd_gate(args: argparse.Namespace) -> None:
+    baseline = load_scorecard(Path(args.baseline))
+    candidate = load_scorecard(Path(args.candidate))
+    policy = load_gate_policy(Path(args.policy)) if args.policy else load_gate_policy()
+    result = evaluate_regression_gate(baseline, candidate, policy)
+    if args.output:
+        write_json(Path(args.output), result)
+    print_json(result)
+    if result["status"] != "pass":
+        raise SystemExit(1 if result["status"] == "fail" else 2)
+
+
 def variant_config(args: argparse.Namespace) -> dict[str, Any]:
     variants = evaluation_plan()["experiment_variants"]
     if args.variant not in variants:
@@ -238,6 +255,11 @@ def variant_config(args: argparse.Namespace) -> dict[str, Any]:
         sample_overrides = deep_merge(
             sample_overrides,
             {"evaluation_config": {"debate_mode": args.debate_mode}},
+        )
+    if args.xgb_mode:
+        sample_overrides = deep_merge(
+            sample_overrides,
+            {"evaluation_config": {"xgb_mode": args.xgb_mode}},
         )
     for agent in args.disabled_agent or []:
         sample_overrides = deep_merge(
@@ -698,6 +720,16 @@ def parser() -> argparse.ArgumentParser:
     compare.add_argument("--output", default="")
     compare.set_defaults(func=cmd_compare)
 
+    gate = sub.add_parser(
+        "gate",
+        help="enforce release regression gates against an approved baseline",
+    )
+    gate.add_argument("baseline", help="approved baseline scorecard JSON")
+    gate.add_argument("candidate", help="candidate scorecard JSON")
+    gate.add_argument("--policy", default="", help="optional regression gate policy JSON")
+    gate.add_argument("--output", default="", help="write the signed gate report JSON")
+    gate.set_defaults(func=cmd_gate)
+
     run = sub.add_parser("run", help="run one resumable experiment variant")
     run.add_argument("--variant", default="full")
     run.add_argument("--plan-version", default="v1")
@@ -740,7 +772,16 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("--model-a-model", default="")
     run.add_argument("--model-b-url", default="")
     run.add_argument("--model-b-model", default="")
-    run.add_argument("--debate-mode", choices=["full", "verification"], default="")
+    run.add_argument(
+        "--debate-mode",
+        choices=["no_debate", "single_model", "verification", "full"],
+        default="",
+    )
+    run.add_argument(
+        "--xgb-mode",
+        choices=["off", "agent_only", "fusion", "full"],
+        default="",
+    )
     run.add_argument(
         "--disabled-agent",
         action="append",

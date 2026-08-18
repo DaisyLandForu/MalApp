@@ -333,16 +333,33 @@ python scripts\evaluation\run_evaluation.py run --variant rag_vector --run-id ra
 python scripts\evaluation\run_evaluation.py run --variant rag_hybrid --run-id rag-hybrid --limit 500
 ```
 
-### 5.3 完整辩论与快速验证
+### 5.3 辩论消融
 
 ```powershell
-python scripts\evaluation\run_evaluation.py run --variant full --run-id debate-full --limit 500
-python scripts\evaluation\run_evaluation.py run --variant verification --run-id debate-short --limit 500
+python -m scripts.evaluation.run_evaluation run --variant debate_none --run-id debate-none --limit 500
+python -m scripts.evaluation.run_evaluation run --variant debate_single --run-id debate-single --limit 500
+python -m scripts.evaluation.run_evaluation run --variant debate_short --run-id debate-short --limit 500
+python -m scripts.evaluation.run_evaluation run --variant debate_full --run-id debate-full --limit 500
 ```
 
-只有在快速验证的恶意召回和良性误报不退化时，才能用延迟优势支持上线。
+四个变体分别表示 Agent 证据直接裁决、仅模型甲独立判断、双模型短验证和完整
+双模型辩论。只有在短路径的恶意召回和良性误报不退化时，才能用延迟优势
+支持上线。
 
-### 5.4 模型甲乙替换
+### 5.4 XGBoost 消融
+
+```powershell
+python -m scripts.evaluation.run_evaluation run --variant xgb_off --run-id xgb-off --limit 500
+python -m scripts.evaluation.run_evaluation run --variant xgb_agent_only --run-id xgb-agent --limit 500
+python -m scripts.evaluation.run_evaluation run --variant xgb_fusion --run-id xgb-fusion --limit 500
+python -m scripts.evaluation.run_evaluation run --variant xgb_full --run-id xgb-full --limit 500
+```
+
+四个变体分别禁用全部 XGBoost、只向领域 Agent 暴露领域先验、只在最终融合
+使用 XGBoost，以及同时启用两条路径。所有变体必须使用同一冻结集、同一 RAG
+快照和同一模型配置。
+
+### 5.5 模型甲乙替换
 
 通过环境变量或独立模型设置文件固定每个实验的：
 
@@ -370,7 +387,7 @@ python scripts\evaluation\run_evaluation.py run `
   --limit 500
 ```
 
-### 5.5 故障注入
+### 5.6 故障注入
 
 单Agent一次瞬时失败：
 
@@ -393,6 +410,29 @@ python scripts\evaluation\run_evaluation.py run `
 -进程中断后恢复。
 
 故障结果必须分为环境故障、模型推理故障、工具故障和数据质量故障。
+
+### 5.7 Regression Gate
+
+批准基线和候选版本各自生成 scorecard 后，执行：
+
+```powershell
+python -m scripts.evaluation.run_evaluation gate `
+  outputs\approved-baseline-scorecard.json `
+  outputs\candidate-scorecard.json `
+  --output outputs\candidate-gate-report.json
+```
+
+门禁只允许比较 `validation_sha256`、总样本数和已评测样本数一致且覆盖率为
+100%的 scorecard。结果有三种状态：
+
+- `pass`：全部比较项通过，命令退出码为 0；
+- `fail`：候选质量发生明确回归，命令退出码为 1；
+- `blocked`：冻结集不一致、覆盖不足或关键指标缺失，命令退出码为 2。
+
+默认策略位于 `malapp/config/defaults/eval/regression_gate.json`，包含恶意召回、
+良性误报、结构成功率、高置信错误和人工确认的 RAG 错误引用五类门禁。CI 中
+执行的是门禁契约样例；真实发布仍必须把完整冻结集运行产生的候选 scorecard
+与已批准基线进行比较，不能用 CI fixture 替代真实模型评测。
 
 ## 6. 长期运行
 

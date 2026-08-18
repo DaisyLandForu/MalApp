@@ -86,6 +86,9 @@ def run_debate(evidence_blocks: list[Any], config: dict[str, Any] | None = None)
         ).to_dict()
     evidence = [compact_evidence_for_llm(dict(item)) for item in envelope["evidence_blocks"]]
     evidence = attach_llm_agent_reviews(evidence, config.get("llm_agent_reviews"))
+    evaluation_mode = str(config.get("evaluation_mode") or "full").strip().lower()
+    if evaluation_mode in {"none", "no_debate", "off"}:
+        return evaluation_no_debate_result(evidence, envelope, config, run_id)
     initial_evidence_json = canonical_json(envelope)
     initial_evidence_json_b = initial_evidence_json
     turn_evidence_json = json.dumps(evidence_for_phase(evidence, "turn"), ensure_ascii=False, separators=(",", ":"))
@@ -127,6 +130,17 @@ def run_debate(evidence_blocks: list[Any], config: dict[str, Any] | None = None)
         "rebuttal": build_debate_skill_context("rebuttal", evidence),
         "closing": build_debate_skill_context("closing", evidence),
     }
+    if evaluation_mode in {"single", "single_model", "model_a_only"}:
+        return evaluation_single_model_result(
+            evidence=evidence,
+            envelope=envelope,
+            config=config,
+            run_id=run_id,
+            provider=providers["model_a"],
+            evidence_json=initial_evidence_json,
+            rag_context=rag_context,
+            skill_context=skill_contexts["initial"],
+        )
     memory = {
         "evidence_summary": summarize_evidence(evidence),
         "rag_context": rag_context,
@@ -397,6 +411,191 @@ def run_debate(evidence_blocks: list[Any], config: dict[str, Any] | None = None)
         "initial_evidence": {
             "model_a_snapshot_id": envelope["evidence_snapshot_id"],
             "model_b_snapshot_id": envelope["evidence_snapshot_id"],
+            "evidence_ids": list(envelope["evidence_ids"]),
+            "sha256": envelope["sha256"],
+        },
+        "prompt_version": debate_prompt_manifest(),
+        "model_calls": model_calls,
+        "arbiter": arbiter,
+        "xgb_prior": config.get("xgb_prior"),
+    }
+
+
+def evidence_only_arbiter(
+    evidence: list[dict[str, Any]],
+    config: dict[str, Any],
+    *,
+    model_result: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    usable = [
+        item
+        for item in evidence
+        if str(item.get("status") or "ok").lower()
+        not in {"insufficient_evidence", "degraded"}
+    ]
+    weighted = 0.0
+    weight_sum = 0.0
+    for item in usable:
+        score = clamp(float(item.get("score") or 0.0))
+        confidence = max(0.05, clamp(float(item.get("confidence") or 0.0)))
+        weighted += score * confidence
+        weight_sum += confidence
+    evidence_score = weighted / weight_sum if weight_sum else 0.5
+    raw_score = evidence_score
+    source = "agent_evidence_only"
+    confidence = 0.0
+    if model_result:
+        model_score = clamp(float(model_result.get("score") or 0.5))
+        raw_score = model_score * 0.65 + evidence_score * 0.35
+        confidence = clamp(float(model_result.get("confidence") or 0.0))
+        source = "single_model_plus_agent_evidence"
+    calibration = calibrate_score(clamp(raw_score), config)
+    score = calibration["calibrated_score"]
+    summary = (
+        f"评测消融模式使用 {source} 形成 Engine C 分数；"
+        f"原始分数 {raw_score:.4f}，校准后分数 {score:.4f}。"
+    )
+    return {
+        "score": score,
+        "raw_score": clamp(raw_score),
+        "verdict": verdict_from_score(score, calibration),
+        "verdict_label": verdict_label(score, calibration),
+        "risk_level": risk_level(score, calibration),
+        "confidence": confidence,
+        "rationale": summary,
+        "logic_trace": {
+            "positions": [],
+            "turning_points": [],
+            "summary": summary,
+        },
+        "final_summary": summary,
+        "calibration": calibration,
+    }
+
+
+def evaluation_no_debate_result(
+    evidence: list[dict[str, Any]],
+    envelope: dict[str, Any],
+    config: dict[str, Any],
+    run_id: str,
+) -> dict[str, Any]:
+    arbiter = evidence_only_arbiter(evidence, config)
+    skipped = {
+        "status": "skipped",
+        "score": arbiter["score"],
+        "verdict": arbiter["verdict"],
+        "risk_level": arbiter["risk_level"],
+        "confidence": 0.0,
+        "arguments": ["No Debate 消融模式未调用模型。"],
+        "evidence_refs": [],
+    }
+    return {
+        "run_id": run_id,
+        "execution_mode": "evaluation_no_debate",
+        "state_machine": {"state": "completed", "phases": ["agent_evidence_arbiter"], "transitions": []},
+        "model_a": {**skipped, "role": ROLE_A["name"]},
+        "model_b": {**skipped, "role": ROLE_B["name"]},
+        "stages": [],
+        "cross_examination": [],
+        "debate_rounds": 0,
+        "convergence": {"stop_reason": "evaluation_no_debate", "max_rounds": 0, "history": []},
+        "memory": {"evidence_summary": summarize_evidence(evidence), "stage_summaries": []},
+        "metrics": {
+            "token_usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            "latency_ms": 0,
+            "stage_latency_ms": {},
+        },
+        "providers": {
+            "model_a": {"backend": "not_invoked", "model": ""},
+            "model_b": {"backend": "not_invoked", "model": ""},
+        },
+        "debate_conformance": "evaluation-no-debate",
+        "evidence_snapshot_id": envelope["evidence_snapshot_id"],
+        "evidence_schema_version": envelope["schema_version"],
+        "initial_evidence": {
+            "model_a_snapshot_id": None,
+            "model_b_snapshot_id": None,
+            "evidence_ids": list(envelope["evidence_ids"]),
+            "sha256": envelope["sha256"],
+        },
+        "prompt_version": None,
+        "model_calls": [],
+        "arbiter": arbiter,
+        "xgb_prior": config.get("xgb_prior"),
+    }
+
+
+def evaluation_single_model_result(
+    *,
+    evidence: list[dict[str, Any]],
+    envelope: dict[str, Any],
+    config: dict[str, Any],
+    run_id: str,
+    provider: Any,
+    evidence_json: str,
+    rag_context: dict[str, Any],
+    skill_context: dict[str, Any],
+) -> dict[str, Any]:
+    started = time.perf_counter()
+    model_a = initial_report(
+        provider,
+        "model_a",
+        ROLE_A,
+        evidence_json,
+        evidence,
+        rag_context,
+        skill_context,
+    )
+    validate_evidence_references(model_a, envelope["evidence_ids"])
+    stage = stage_record("single_model_assessment", 0, [model_a])
+    arbiter = evidence_only_arbiter(evidence, config, model_result=model_a)
+    providers = {"model_a": provider}
+    model_calls = build_model_call_trace(
+        [stage],
+        providers,
+        run_id=run_id,
+        evidence_snapshot_id=envelope["evidence_snapshot_id"],
+    )
+    prompt_tokens = int(model_a.get("prompt_tokens") or 0)
+    completion_tokens = int(model_a.get("completion_tokens") or 0)
+    return {
+        "run_id": run_id,
+        "execution_mode": "evaluation_single_model",
+        "state_machine": {"state": "completed", "phases": ["single_model_assessment"], "transitions": []},
+        "model_a": public_model_result(model_a, ROLE_A),
+        "model_b": {
+            "status": "skipped",
+            "role": ROLE_B["name"],
+            "score": arbiter["score"],
+            "verdict": arbiter["verdict"],
+            "confidence": 0.0,
+            "arguments": ["Single Model 消融模式未调用模型乙。"],
+            "evidence_refs": [],
+        },
+        "stages": [stage],
+        "cross_examination": [],
+        "debate_rounds": 0,
+        "convergence": {"stop_reason": "evaluation_single_model", "max_rounds": 0, "history": []},
+        "memory": {"evidence_summary": summarize_evidence(evidence), "stage_summaries": [compress_stage(stage)]},
+        "metrics": {
+            "token_usage": {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": prompt_tokens + completion_tokens,
+            },
+            "latency_ms": int((time.perf_counter() - started) * 1000),
+            "stage_latency_ms": {"single_model_assessment:0": stage["latency_ms"]},
+        },
+        "providers": {
+            "model_a": provider.public_config(),
+            "model_b": {"backend": "not_invoked", "model": ""},
+        },
+        "debate_conformance": "evaluation-single-model",
+        "evidence_snapshot_id": envelope["evidence_snapshot_id"],
+        "evidence_schema_version": envelope["schema_version"],
+        "initial_evidence": {
+            "model_a_snapshot_id": envelope["evidence_snapshot_id"],
+            "model_b_snapshot_id": None,
             "evidence_ids": list(envelope["evidence_ids"]),
             "sha256": envelope["sha256"],
         },

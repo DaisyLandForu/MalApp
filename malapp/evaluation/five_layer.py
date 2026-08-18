@@ -3409,11 +3409,25 @@ def collect_five_layer_experiments(
         expected_variants=2,
     )
     recovery.update(_agent_recovery_metrics(recovery))
+    debate = _workflow_experiment(
+        data_dir=data_dir,
+        suite_id=suite_id,
+        action="debate_ablation",
+        expected_variants=4,
+    )
+    xgb = _workflow_experiment(
+        data_dir=data_dir,
+        suite_id=suite_id,
+        action="xgb_ablation",
+        expected_variants=4,
+    )
     return {
         "model_release": model_release,
         "gold_compare": gold_compare,
         "rag_compare": rag,
         "agent_ablation": agent,
+        "debate_ablation": debate,
+        "xgb_ablation": xgb,
         "recovery": recovery,
     }
 
@@ -3444,6 +3458,8 @@ def suite_readiness(
     rag_experiment = experiments.get("rag_compare") or {}
     agent_experiment = experiments.get("agent_ablation") or {}
     recovery_experiment = experiments.get("recovery") or {}
+    debate_experiment = experiments.get("debate_ablation") or {}
+    xgb_experiment = experiments.get("xgb_ablation") or {}
     model_experiment = experiments.get("model_release") or {}
     strict_channels = model_experiment.get("reference_channels") or {}
     strict_pipeline = strict_channels.get("pipeline_final") or {}
@@ -3539,10 +3555,21 @@ def suite_readiness(
             ),
         },
         "layer4_e2e": {
-            "status": "ready" if layer4.get("coverage") == 1.0 else "partial",
+            "status": (
+                "ready"
+                if layer4.get("coverage") == 1.0
+                and debate_experiment.get("status") == "completed"
+                and xgb_experiment.get("status") == "completed"
+                else "blocked"
+                if debate_experiment.get("status") == "failed"
+                or xgb_experiment.get("status") == "failed"
+                else "partial"
+            ),
             "reason": (
                 f"严格未见集覆盖率{layer4.get('coverage')}; "
-                f"待研判{layer4.get('pending_total')}条。"
+                f"待研判{layer4.get('pending_total')}条；"
+                f"辩论消融{debate_experiment.get('completed_variants', 0)}/4；"
+                f"XGBoost消融{xgb_experiment.get('completed_variants', 0)}/4。"
             ),
         },
         "layer5_production": {

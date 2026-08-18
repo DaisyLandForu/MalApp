@@ -183,6 +183,9 @@ class EvaluationFrameworkTest(unittest.TestCase):
         self.assertEqual(1, metrics["human_review"]["reviewed_reports"])
         self.assertEqual(1.0, metrics["human_review"]["evidence_faithfulness_rate"])
         self.assertEqual(0.0, metrics["human_review"]["hallucination_rate"])
+        self.assertEqual(0, metrics["high_confidence_error_count"])
+        self.assertEqual(1, metrics["human_review"]["rag_citation_review_count"])
+        self.assertEqual(0, metrics["human_review"]["wrong_rag_citation_count"])
 
     def test_rag_retrieval_scorecard_uses_only_approved_annotations(self) -> None:
         rag_path = self.root / "rag.jsonl"

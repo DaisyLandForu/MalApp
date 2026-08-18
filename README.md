@@ -137,6 +137,10 @@ python -m pip install -e '.[sft]'        # GPU SFT
 python -m scripts.rag.build_index --help
 python -m scripts.evaluation.run_evaluation --help
 python -m scripts.evaluation.run_five_layer --help
+python -m scripts.evaluation.run_evaluation gate \
+  outputs/approved-baseline-scorecard.json \
+  outputs/candidate-scorecard.json \
+  --output outputs/candidate-gate-report.json
 python -m scripts.training.build_corpora --help
 ```
 

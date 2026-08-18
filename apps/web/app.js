@@ -972,6 +972,13 @@ function fiveLayerExperimentHtml(key, experiments) {
       ? experiments?.rag_compare
       : key === "layer3_agent"
         ? experiments?.agent_ablation
+        : key === "layer4_e2e"
+          ? {
+              variants: [
+                ...((experiments?.debate_ablation?.variants || []).map(item => ({...item, name: `辩论：${item.name || item.variant || "--"}`}))),
+                ...((experiments?.xgb_ablation?.variants || []).map(item => ({...item, name: `XGBoost：${item.name || item.variant || "--"}`}))),
+              ],
+            }
         : null;
   if (!experiment) return "";
   const variants = experiment.variants || [];
@@ -1154,6 +1161,18 @@ function renderFiveLayerCards(data) {
     const ready = data.readiness?.layers?.[key] || {};
     const layerCounts = data.latest_suite?.dataset_counts?.[key] || {};
     const latestJob = workflows.latest_by_action?.[action] || null;
+    const actionHtml = key === "layer1_model"
+      ? `<div class="five-layer-dataset-actions">
+          ${fiveLayerActionHtml(key, "gold_compare", workflows.catalog, workflows.latest_by_action?.gold_compare || null, workflows.active_job)}
+          ${fiveLayerActionHtml(key, action, workflows.catalog, latestJob, workflows.active_job)}
+        </div>`
+      : key === "layer4_e2e"
+        ? `<div class="five-layer-dataset-actions">
+            ${fiveLayerActionHtml(key, action, workflows.catalog, latestJob, workflows.active_job)}
+            ${fiveLayerActionHtml(key, "debate_ablation", workflows.catalog, workflows.latest_by_action?.debate_ablation || null, workflows.active_job)}
+            ${fiveLayerActionHtml(key, "xgb_ablation", workflows.catalog, workflows.latest_by_action?.xgb_ablation || null, workflows.active_job)}
+          </div>`
+        : fiveLayerActionHtml(key, action, workflows.catalog, latestJob, workflows.active_job);
     const datasetLines = Object.entries(layerCounts).map(([name, count]) =>
       `<li><span>${esc(fiveLayerDatasetLabel(name))}</span><strong>${num(count)} 条</strong></li>`
     ).join("");
@@ -1193,16 +1212,7 @@ function renderFiveLayerCards(data) {
         <strong>当前结论</strong>
         <span>${esc(ready.reason || "等待生成与运行评测")}</span>
       </div>
-      ${key === "layer1_model" ? `<div class="five-layer-dataset-actions">
-        ${fiveLayerActionHtml(
-          key,
-          "gold_compare",
-          workflows.catalog,
-          workflows.latest_by_action?.gold_compare || null,
-          workflows.active_job,
-        )}
-        ${fiveLayerActionHtml(key, action, workflows.catalog, latestJob, workflows.active_job)}
-      </div>` : fiveLayerActionHtml(key, action, workflows.catalog, latestJob, workflows.active_job)}
+      ${actionHtml}
     </article>`;
   }).join("");
 

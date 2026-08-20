@@ -237,7 +237,8 @@ def cmd_gate(args: argparse.Namespace) -> None:
 
 def cmd_trajectory_manifest(args: argparse.Namespace) -> None:
     """Build a frozen 100-200 sample trajectory benchmark without running models."""
-    from malapp.evaluation.trajectory import build_benchmark_manifest, write_json as write_traj
+    from malapp.evaluation.trajectory import build_benchmark_manifest
+    from malapp.evaluation.trajectory import write_json as write_traj
 
     rows = load_validation_rows(Path(args.validation_csv))
     manifest = build_benchmark_manifest(
@@ -252,7 +253,8 @@ def cmd_trajectory_manifest(args: argparse.Namespace) -> None:
 
 def cmd_trajectory_score(args: argparse.Namespace) -> None:
     """Score already persisted judgement reports. Does not call models."""
-    from malapp.evaluation.trajectory import score_reports, write_json as write_traj
+    from malapp.evaluation.trajectory import score_reports
+    from malapp.evaluation.trajectory import write_json as write_traj
 
     reports = []
     if args.reports:

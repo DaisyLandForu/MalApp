@@ -586,6 +586,7 @@ class PipelineTest(unittest.TestCase):
                 "sample_id": "agent-runtime-test",
                 "app_name": "Runtime Test",
                 "package_name": "com.runtime.test",
+                "control_url": "https://c2.example.test/gate",
                 "engine_a_score": 50,
                 "engine_b_score": 50,
                 "force_engine_c": True,

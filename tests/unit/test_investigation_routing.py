@@ -144,6 +144,120 @@ class InvestigationRoutingTest(unittest.TestCase):
         self.assertEqual(result.failure_type, "skipped_by_plan")
         self.assertIn("business_label_analysis", result.artifacts)
 
+    def test_v0_respects_threat_intel_disabled(self) -> None:
+        with patch.dict("os.environ", {"MALAPP_PLANNER_ENABLED": "0"}, clear=False):
+            _blocks, report, results = run_investigation(
+                {
+                    "sample_id": "v0-disabled",
+                    "package_name": "com.example.app",
+                    "agent_runtime_config": {"agents": {"threat_intel": {"enabled": False}}},
+                },
+                [],
+                run_id="run-v0-disabled",
+                agents=self.agents,
+            )
+        threat = next(item for item in results if item.agent_name == "threat_intel")
+        self.assertEqual(threat.failure_type, "disabled")
+        self.assertEqual(self.agents[1].calls, 0)
+        self.assertEqual(self.agents[0].calls, 1)
+        self.assertTrue(report["agents"]["threat_intel"]["trace"])
+
+    def test_planner_respects_static_analysis_disabled(self) -> None:
+        with patch.dict("os.environ", {"MALAPP_PLANNER_ENABLED": "1", "MALAPP_PLANNER_MODE": "rule"}, clear=False):
+            _blocks, report, results = run_investigation(
+                {
+                    "sample_id": "planner-static-disabled",
+                    "control_url": "https://c2.example.test",
+                    "agent_runtime_config": {"agents": {"static_analysis": {"enabled": False}}},
+                },
+                [],
+                run_id="run-static-disabled",
+                agents=self.agents,
+            )
+        static = next(item for item in results if item.agent_name == "static_analysis")
+        self.assertEqual(static.failure_type, "disabled")
+        self.assertNotEqual(static.failure_type, "skipped_by_plan")
+        self.assertEqual(self.agents[0].calls, 0)
+        self.assertTrue(report["investigation"]["degradation"]["reasons"])
+        self.assertTrue(report["agents"]["static_analysis"]["trace"])
+
+    def test_rule_planner_runs_high_value_agents_from_signals(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {"MALAPP_PLANNER_ENABLED": "1", "MALAPP_PLANNER_MODE": "rule", "MALAPP_TOOL_RUNTIME_ENABLED": "0"},
+            clear=False,
+        ):
+            _blocks, _report, results = run_investigation(
+                {
+                    "sample_id": "high-value",
+                    "app_name": "Fast Loan",
+                    "package_name": "com.fast.loan.update",
+                    "permissions": ["READ_SMS"],
+                    "control_url": "https://c2-loan-risk.example.net/upload",
+                    "callback_url": "https://cb.example.test/beacon",
+                    "icon_hash": "a" * 64,
+                    "icon_text": "Secure Wallet",
+                    "official_app_assets": [{"brand": "Secure Wallet", "icon_hash": "a" * 64}],
+                },
+                [],
+                run_id="run-high-value",
+                agents=self.agents,
+            )
+        by_name = {item.agent_name: item for item in results}
+        self.assertEqual(by_name["threat_intel"].status, "completed")
+        self.assertEqual(by_name["impersonation"].status, "completed")
+        self.assertEqual(by_name["business_label"].status, "completed")
+        self.assertEqual([agent.calls for agent in self.agents], [1, 1, 1, 1])
+
+    def test_skipped_agents_keep_nonempty_trace(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {"MALAPP_PLANNER_ENABLED": "1", "MALAPP_PLANNER_MODE": "rule", "MALAPP_TOOL_RUNTIME_ENABLED": "0"},
+            clear=False,
+        ):
+            _blocks, report, _results = run_investigation(
+                {"sample_id": "v1-trace", "package_name": "com.example.app", "signature_status": "valid"},
+                [],
+                run_id="run-v1-trace",
+                agents=self.agents,
+            )
+        for name in AGENT_ORDER:
+            self.assertTrue(report["agents"][name]["trace"], name)
+
+    def test_replan_keeps_first_round_static_trace(self) -> None:
+        plan = {
+            "plan_version": "1.0",
+            "risk_focus": ["static_baseline", "network_ioc"],
+            "agents": {
+                "static_analysis": {"enabled": True, "reason_code": "mandatory_static_baseline"},
+                "threat_intel": {"enabled": False, "reason_code": "insufficient_network_signal"},
+                "impersonation": {"enabled": False, "reason_code": "insufficient_impersonation_signal"},
+                "business_label": {"enabled": False, "reason_code": "insufficient_business_signal"},
+            },
+            "max_replans": 1,
+        }
+        with patch.dict(
+            "os.environ",
+            {"MALAPP_PLANNER_ENABLED": "1", "MALAPP_PLANNER_MODE": "llm", "MALAPP_TOOL_RUNTIME_ENABLED": "0"},
+            clear=False,
+        ):
+            _blocks, report, results = run_investigation(
+                {"sample_id": "replan-trace", "package_name": "com.example.app", "investigation_plan": plan},
+                [],
+                run_id="run-replan-trace",
+                agents=self.agents,
+            )
+        self.assertEqual(report["investigation"]["recovery_used"], 1)
+        self.assertTrue(report["agents"]["static_analysis"]["trace"])
+        lifecycle_agents = {event.get("agent") for event in report["lifecycle"] if event.get("agent")}
+        self.assertIn("static_analysis", lifecycle_agents)
+        self.assertIn("threat_intel", lifecycle_agents)
+        self.assertTrue(report["agents"]["threat_intel"]["trace"])
+        for name in AGENT_ORDER:
+            self.assertTrue(report["agents"][name]["trace"], name)
+        threat = next(item for item in results if item.agent_name == "threat_intel")
+        self.assertEqual(threat.status, "completed")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -24,20 +24,37 @@ ORCHESTRATION_MODES = ("v0_fixed", "v1_planner", "v2_planner_tools")
 NETWORK_FIELDS = (
     "control_url",
     "download_url",
+    "callback_url",
+    "landing_url",
     "control_mailbox",
     "control_phone",
-    "domains",
-    "ips",
     "urls",
+    "lt_urls",
+    "sub_urls",
+    "dynamic_nets",
+    "domains",
+    "top_domains",
+    "domain",
+    "top_domain",
+    "ips",
+    "ip",
     "threat_intel_records",
+    "intelligence_records",
 )
 IMPERSONATION_FIELDS = (
     "fake_app",
     "official_app_name",
     "official_pkg",
     "official_md5",
+    "official_icon",
     "brand_similarity",
     "impersonation_flag",
+    "official_app_assets",
+    "official_asset_library",
+    "icon_hash",
+    "icon_text",
+    "icon_path",
+    "icon_base64",
 )
 BUSINESS_FIELDS = (
     "fraud_category_big",
@@ -140,7 +157,27 @@ def present_any(sample: dict[str, Any], keys: tuple[str, ...]) -> bool:
     return any(present(sample, key) for key in keys)
 
 
-def planner_context(sample: dict[str, Any]) -> dict[str, Any]:
+def has_network_signal(sample: dict[str, Any], iocs: list[dict[str, Any]] | None = None) -> bool:
+    return present_any(sample, NETWORK_FIELDS) or bool(iocs)
+
+
+def has_impersonation_signal(sample: dict[str, Any]) -> bool:
+    return present_any(sample, IMPERSONATION_FIELDS)
+
+
+def has_business_signal(sample: dict[str, Any]) -> bool:
+    if present_any(sample, BUSINESS_FIELDS):
+        return True
+    from malapp.agents.business_label import build_harm_chain, determine_variant, translate_technical_features
+
+    scene = translate_technical_features(sample)
+    chain = build_harm_chain(sample)
+    variant = determine_variant(sample)
+    variant_label = str(variant.get("variant_label") or "unknown")
+    return bool(scene.get("labels") or chain.get("stages") or variant_label not in {"", "unknown"})
+
+
+def planner_context(sample: dict[str, Any], iocs: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """Compact planner input. Never pass the raw sample blob."""
     label_a = str(sample.get("engine_a_label") or "")
     label_b = str(sample.get("engine_b_label") or "")
@@ -150,9 +187,9 @@ def planner_context(sample: dict[str, Any]) -> dict[str, Any]:
         "package_name": str(sample.get("package_name") or "")[:120],
         "signature_status": str(sample.get("signature_status") or ""),
         "has_certificate": present(sample, "certificate_fingerprint") or present(sample, "cert_sha256"),
-        "has_network_ioc": present_any(sample, NETWORK_FIELDS),
-        "has_impersonation_signal": present_any(sample, IMPERSONATION_FIELDS),
-        "has_business_signal": present_any(sample, BUSINESS_FIELDS),
+        "has_network_ioc": has_network_signal(sample, iocs),
+        "has_impersonation_signal": has_impersonation_signal(sample),
+        "has_business_signal": has_business_signal(sample),
         "ab_disagreement": bool(label_a and label_b and label_a != label_b),
         "risk_category": str(sample.get("fraud_category_big") or sample.get("harm_type") or ""),
         "missing_fields": [
@@ -203,10 +240,11 @@ def validate_plan(raw: dict[str, Any] | InvestigationPlan) -> InvestigationPlan:
         item = agents_raw.get(name)
         if not isinstance(item, dict):
             raise PlanValidationError(f"agent plan missing: {name}")
-        enabled = bool(item.get("enabled"))
-        reason_code = str(item.get("reason_code") or "").strip()
-        if not reason_code:
+        enabled = strict_bool(item.get("enabled"), f"agents.{name}.enabled")
+        reason_code = item.get("reason_code")
+        if not isinstance(reason_code, str) or not reason_code.strip():
             raise PlanValidationError(f"reason_code required for {name}")
+        reason_code = reason_code.strip()
         if name in MANDATORY_AGENTS and not enabled:
             raise PlanValidationError("static_analysis cannot be disabled")
         agents[name] = AgentPlan(enabled=enabled, reason_code=reason_code)
@@ -231,13 +269,13 @@ def validate_plan(raw: dict[str, Any] | InvestigationPlan) -> InvestigationPlan:
     risk_focus = payload.get("risk_focus") or []
     if not isinstance(risk_focus, (list, tuple)):
         raise PlanValidationError("risk_focus must be an array")
-    max_replans = payload.get("max_replans", 1)
-    try:
-        max_replans_n = int(max_replans)
-    except (TypeError, ValueError) as exc:
-        raise PlanValidationError("max_replans must be an integer") from exc
+    max_replans_n = strict_int(payload.get("max_replans", 1), "max_replans")
     if max_replans_n != 1:
         raise PlanValidationError("max_replans must be 1")
+
+    fallback_flag = False
+    if "fallback" in payload:
+        fallback_flag = strict_bool(payload.get("fallback"), "fallback")
 
     return InvestigationPlan(
         plan_version=version,
@@ -247,7 +285,7 @@ def validate_plan(raw: dict[str, Any] | InvestigationPlan) -> InvestigationPlan:
         tool_allowlist=allowlist,
         max_replans=1,
         planner_mode=str(payload.get("planner_mode") or planner_mode()),
-        fallback=bool(payload.get("fallback")),
+        fallback=fallback_flag,
         fallback_reason=str(payload.get("fallback_reason") or ""),
         source=str(payload.get("source") or "validated"),
     )
@@ -320,16 +358,26 @@ def apply_disabled_overrides(plan: InvestigationPlan, sample: dict[str, Any]) ->
         return plan
     agents = dict(plan.agents)
     for name in disabled:
-        if name == "static_analysis":
-            continue
         if name in agents:
             agents[name] = AgentPlan(enabled=False, reason_code="disabled_agent_override")
     plan.agents = agents
     return plan
 
 
-def build_rule_plan(sample: dict[str, Any]) -> InvestigationPlan:
-    context = planner_context(sample)
+def strict_bool(value: Any, field: str) -> bool:
+    if not isinstance(value, bool):
+        raise PlanValidationError(f"{field} must be a boolean")
+    return value
+
+
+def strict_int(value: Any, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise PlanValidationError(f"{field} must be an integer")
+    return value
+
+
+def build_rule_plan(sample: dict[str, Any], iocs: list[dict[str, Any]] | None = None) -> InvestigationPlan:
+    context = planner_context(sample, iocs)
     risk_focus = ["static_baseline"]
     agents = {
         "static_analysis": AgentPlan(enabled=True, reason_code="mandatory_static_baseline"),
@@ -371,8 +419,12 @@ def build_rule_plan(sample: dict[str, Any]) -> InvestigationPlan:
 def enable_agents(plan: InvestigationPlan, names: list[str], reason_code: str) -> InvestigationPlan:
     agents = dict(plan.agents)
     for name in names:
-        if name in agents and not agents[name].enabled:
-            agents[name] = AgentPlan(enabled=True, reason_code=reason_code)
+        current = agents.get(name)
+        if current is None or current.enabled:
+            continue
+        if current.reason_code == "disabled_agent_override":
+            continue
+        agents[name] = AgentPlan(enabled=True, reason_code=reason_code)
     plan.agents = agents
     return plan
 
@@ -389,11 +441,14 @@ def extend_tool_allowlist(plan: InvestigationPlan, agent: str, tools: list[str])
     return plan
 
 
-def build_investigation_plan(sample: dict[str, Any]) -> tuple[InvestigationPlan, list[dict[str, Any]]]:
+def build_investigation_plan(
+    sample: dict[str, Any],
+    iocs: list[dict[str, Any]] | None = None,
+) -> tuple[InvestigationPlan, list[dict[str, Any]]]:
     events: list[dict[str, Any]] = []
     mode = planner_mode()
     if not planner_enabled():
-        plan = v0_fixed_plan(reason="planner_disabled", planner_mode_name=mode)
+        plan = apply_disabled_overrides(v0_fixed_plan(reason="planner_disabled", planner_mode_name=mode), sample)
         events.append(plan_event("planner_finished", "disabled", "planner disabled; using V0 fan-out", plan=plan))
         return plan, events
 
@@ -411,15 +466,18 @@ def build_investigation_plan(sample: dict[str, Any]) -> tuple[InvestigationPlan,
                 plan = apply_disabled_overrides(validate_plan(candidate), sample)
                 plan.source = "hybrid"
             else:
-                plan = build_rule_plan(sample)
+                plan = build_rule_plan(sample, iocs)
                 plan.source = "hybrid_rule"
         else:
-            plan = build_rule_plan(sample)
+            plan = build_rule_plan(sample, iocs)
         events.append(plan_event("planner_finished", "completed", "plan validated", plan=plan))
         return plan, events
     except PlanValidationError as exc:
         events.append(plan_event("planner_invalid", "failed", str(exc)))
-        fallback = v0_fixed_plan(reason=str(exc), fallback=True, planner_mode_name=mode)
+        fallback = apply_disabled_overrides(
+            v0_fixed_plan(reason=str(exc), fallback=True, planner_mode_name=mode),
+            sample,
+        )
         events.append(plan_event("planner_fallback", "fallback", str(exc), plan=fallback))
         return fallback, events
 

@@ -5,7 +5,7 @@ import unittest
 from malapp.agents.threat_intelligence import analyze_threat_intelligence
 from malapp.tools.executor import ToolExecutor
 from malapp.tools.registry import default_registry
-from malapp.tools.threat import assemble_threat_analysis, ioc_lookup, network_indicator, family_correlation
+from malapp.tools.threat import assemble_threat_analysis, family_correlation, ioc_lookup, network_indicator
 
 
 class ToolRuntimeTest(unittest.TestCase):

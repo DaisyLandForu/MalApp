@@ -11,6 +11,7 @@ from malapp.orchestration.evidence_gate import EvidenceGateResult, evaluate_evid
 from malapp.orchestration.planner import (
     InvestigationPlan,
     build_investigation_plan,
+    disabled_agent_names,
     enable_agents,
     extend_tool_allowlist,
     orchestration_mode,
@@ -19,14 +20,7 @@ from malapp.orchestration.planner import (
     skipped_by_plan_result,
     tool_runtime_enabled,
 )
-from malapp.orchestration.runtime import AgentRegistry, AgentRuntime, degraded_result
-
-
-ARTIFACT_KEYS = {
-    "threat_intel": "threat_intelligence",
-    "impersonation": "impersonation_analysis",
-    "business_label": "business_label_analysis",
-}
+from malapp.orchestration.runtime import AgentRegistry, AgentRuntime, append_event, degraded_result
 
 
 def run_investigation(
@@ -39,10 +33,27 @@ def run_investigation(
 ) -> tuple[list[EvidenceBlock], dict[str, Any], list[AgentResult]]:
     agents_by_name = {agent.name: agent for agent in agents}
     events: list[dict[str, Any]] = []
-    plan, plan_events = build_investigation_plan(sample)
+    plan, plan_events = build_investigation_plan(sample, iocs)
     events.extend(_with_run_id(plan_events, run_id, plan))
     recovery_used = 0
     executed_tools: dict[str, list[str]] = {name: [] for name in AGENT_ORDER}
+
+    if not planner_enabled():
+        results, runtime_report = _execute_v0(
+            sample,
+            iocs,
+            run_id=run_id,
+            agents_by_name=agents_by_name,
+            plan=plan,
+        )
+        runtime_report = _merge_runtime_report(
+            runtime_report, results, plan, events, EvidenceGateResult(), recovery_used, expert_provider
+        )
+        blocks = [block for result in results for block in result.evidence]
+        runtime_report["results"] = [result.to_dict() for result in results]
+        if expert_provider is not None:
+            runtime_report["expert_runtime"] = expert_provider.manifest()
+        return blocks, runtime_report, results
 
     results, runtime_report = _execute_plan(
         plan,
@@ -54,40 +65,51 @@ def run_investigation(
         executed_tools=executed_tools,
     )
 
-    gate = EvidenceGateResult()
-    if planner_enabled():
-        gate = evaluate_evidence_gate(plan, results, executed_tools=executed_tools)
+    gate = evaluate_evidence_gate(
+        plan,
+        results,
+        sample=sample,
+        iocs=iocs,
+        executed_tools=executed_tools,
+    )
+    events.append(
+        _gate_event(
+            "evidence_gate_passed" if gate.sufficient else "evidence_gate_failed",
+            gate,
+            plan,
+            run_id,
+        )
+    )
+    if not gate.sufficient and recovery_used < 1:
+        recovery_used += 1
+        results, runtime_report, plan = _recover(
+            plan,
+            gate,
+            results,
+            runtime_report,
+            sample,
+            iocs,
+            run_id=run_id,
+            agents_by_name=agents_by_name,
+            events=events,
+            executed_tools=executed_tools,
+        )
+        gate = evaluate_evidence_gate(
+            plan,
+            results,
+            sample=sample,
+            iocs=iocs,
+            executed_tools=executed_tools,
+        )
         events.append(
             _gate_event(
                 "evidence_gate_passed" if gate.sufficient else "evidence_gate_failed",
                 gate,
                 plan,
                 run_id,
+                message="post-recovery gate",
             )
         )
-        if not gate.sufficient and recovery_used < 1:
-            recovery_used += 1
-            results, runtime_report, plan = _recover(
-                plan,
-                gate,
-                results,
-                sample,
-                iocs,
-                run_id=run_id,
-                agents_by_name=agents_by_name,
-                events=events,
-                executed_tools=executed_tools,
-            )
-            gate = evaluate_evidence_gate(plan, results, executed_tools=executed_tools)
-            events.append(
-                _gate_event(
-                    "evidence_gate_passed" if gate.sufficient else "evidence_gate_failed",
-                    gate,
-                    plan,
-                    run_id,
-                    message="post-recovery gate",
-                )
-            )
 
     results = _ordered_results(results)
     runtime_report = _merge_runtime_report(runtime_report, results, plan, events, gate, recovery_used, expert_provider)
@@ -96,6 +118,26 @@ def run_investigation(
     if expert_provider is not None:
         runtime_report["expert_runtime"] = expert_provider.manifest()
     return blocks, runtime_report, results
+
+
+def _execute_v0(
+    sample: dict[str, Any],
+    iocs: list[dict[str, Any]],
+    *,
+    run_id: str,
+    agents_by_name: dict[str, Agent],
+    plan: InvestigationPlan,
+) -> tuple[list[AgentResult], dict[str, Any]]:
+    ordered = [agents_by_name[name] for name in AGENT_ORDER if name in agents_by_name]
+    config = sample.get("agent_runtime_config") if isinstance(sample.get("agent_runtime_config"), dict) else {}
+    results, runtime_report = AgentRuntime(AgentRegistry(ordered)).execute(
+        sample,
+        iocs=iocs,
+        config=config,
+        metadata=_execution_metadata(plan),
+        run_id=run_id,
+    )
+    return list(results), runtime_report
 
 
 def _execute_plan(
@@ -109,7 +151,11 @@ def _execute_plan(
     executed_tools: dict[str, list[str]],
     only: list[str] | None = None,
 ) -> tuple[list[AgentResult], dict[str, Any]]:
-    selected = [name for name in (only or plan.enabled_agents()) if name in agents_by_name]
+    selected = [
+        name
+        for name in (only or plan.enabled_agents())
+        if name in agents_by_name and name not in disabled_agent_names(sample)
+    ]
     metadata = _execution_metadata(plan)
     runtime_report: dict[str, Any] = {
         "run_id": run_id,
@@ -123,7 +169,7 @@ def _execute_plan(
         results, runtime_report = AgentRuntime(AgentRegistry([agents_by_name[name] for name in selected])).execute(
             sample,
             iocs=iocs,
-            config=_runtime_config_for_selected(sample, selected),
+            config=_runtime_config_for_selected(sample),
             metadata=metadata,
             run_id=run_id,
         )
@@ -171,6 +217,7 @@ def _execute_plan(
             )
         )
         merged.append(result)
+    runtime_report = _attach_placeholder_traces(runtime_report, merged, run_id)
     return merged, runtime_report
 
 
@@ -178,6 +225,7 @@ def _recover(
     plan: InvestigationPlan,
     gate: EvidenceGateResult,
     results: list[AgentResult],
+    runtime_report: dict[str, Any],
     sample: dict[str, Any],
     iocs: list[dict[str, Any]],
     *,
@@ -232,6 +280,7 @@ def _recover(
         )
         for item in extra:
             existing[item.agent_name] = item
+        runtime_report = _combine_runtime_reports(runtime_report, extra_report)
 
     events.append(
         plan_event(
@@ -243,7 +292,8 @@ def _recover(
         )
     )
     merged = [existing[name] for name in AGENT_ORDER if name in existing]
-    return merged, extra_report, plan
+    runtime_report = _attach_placeholder_traces(runtime_report, merged, run_id)
+    return merged, runtime_report, plan
 
 
 def _completed(result: AgentResult | None) -> bool:
@@ -286,15 +336,72 @@ def _record_executed_tools(result: AgentResult, executed_tools: dict[str, list[s
     executed_tools[result.agent_name] = current
 
 
-def _runtime_config_for_selected(sample: dict[str, Any], selected: list[str]) -> dict[str, Any]:
-    config = dict(sample.get("agent_runtime_config") if isinstance(sample.get("agent_runtime_config"), dict) else {})
-    overrides = dict(config.get("agents") if isinstance(config.get("agents"), dict) else {})
-    for name in selected:
-        item = dict(overrides.get(name) if isinstance(overrides.get(name), dict) else {})
-        item["enabled"] = True
-        overrides[name] = item
-    config["agents"] = overrides
-    return config
+def _runtime_config_for_selected(sample: dict[str, Any]) -> dict[str, Any]:
+    config = sample.get("agent_runtime_config")
+    return dict(config) if isinstance(config, dict) else {}
+
+
+def _combine_runtime_reports(first: dict[str, Any], second: dict[str, Any]) -> dict[str, Any]:
+    combined = dict(first or {})
+    extra = second or {}
+    combined["lifecycle"] = list(combined.get("lifecycle") or []) + list(extra.get("lifecycle") or [])
+    agents = dict(combined.get("agents") if isinstance(combined.get("agents"), dict) else {})
+    for name, state in (extra.get("agents") if isinstance(extra.get("agents"), dict) else {}).items():
+        agents[name] = state
+    combined["agents"] = agents
+    try:
+        combined["latency_ms"] = round(float(combined.get("latency_ms") or 0) + float(extra.get("latency_ms") or 0), 3)
+    except (TypeError, ValueError):
+        pass
+    return combined
+
+
+def _attach_placeholder_traces(
+    runtime_report: dict[str, Any],
+    results: list[AgentResult],
+    run_id: str,
+) -> dict[str, Any]:
+    report = dict(runtime_report or {})
+    agents = dict(report.get("agents") if isinstance(report.get("agents"), dict) else {})
+    for result in results:
+        current = agents.get(result.agent_name)
+        if isinstance(current, dict) and current.get("trace"):
+            continue
+        agents[result.agent_name] = _placeholder_agent_entry(result, run_id)
+    report["agents"] = agents
+    return report
+
+
+def _placeholder_agent_entry(result: AgentResult, run_id: str) -> dict[str, Any]:
+    lifecycle: list[dict[str, Any]] = []
+    trace: list[dict[str, Any]] = []
+    append_event(lifecycle, trace, result.agent_name, "registered", "created", "agent registered", run_id)
+    if result.failure_type == "disabled":
+        append_event(lifecycle, trace, result.agent_name, "skipped", "disabled", result.error or "", run_id)
+    elif result.failure_type == "skipped_by_plan":
+        append_event(lifecycle, trace, result.agent_name, "skipped", "skipped", result.error or "", run_id)
+    else:
+        append_event(
+            lifecycle,
+            trace,
+            result.agent_name,
+            "completed" if result.status == "completed" else "failed",
+            result.status,
+            result.error or result.status,
+            run_id,
+        )
+    return {
+        "status": result.status,
+        "score": result.score,
+        "confidence": result.confidence,
+        "last_latency_ms": result.latency_ms,
+        "last_error": result.error or "",
+        "failure_type": result.failure_type,
+        "attempts": result.attempts,
+        "restart_count": max(0, result.attempts - 1),
+        "config": {"enabled": result.failure_type not in {"skipped_by_plan", "disabled"}},
+        "trace": trace,
+    }
 
 
 def _ordered_results(results: list[AgentResult]) -> list[AgentResult]:
@@ -314,20 +421,10 @@ def _merge_runtime_report(
     report = dict(runtime_report or {})
     agents_meta = dict(report.get("agents") if isinstance(report.get("agents"), dict) else {})
     for result in results:
-        if result.agent_name in agents_meta:
+        existing = agents_meta.get(result.agent_name)
+        if isinstance(existing, dict) and existing.get("trace"):
             continue
-        agents_meta[result.agent_name] = {
-            "status": result.status,
-            "score": result.score,
-            "confidence": result.confidence,
-            "last_latency_ms": result.latency_ms,
-            "last_error": result.error or "",
-            "failure_type": result.failure_type,
-            "attempts": result.attempts,
-            "restart_count": max(0, result.attempts - 1),
-            "config": {"enabled": result.failure_type != "skipped_by_plan"},
-            "trace": [],
-        }
+        agents_meta[result.agent_name] = _placeholder_agent_entry(result, str(report.get("run_id") or ""))
     report["agents"] = agents_meta
     statuses = {item.status for item in results if item.failure_type != "skipped_by_plan"}
     if any(status in {"failed", "timeout"} for status in statuses):

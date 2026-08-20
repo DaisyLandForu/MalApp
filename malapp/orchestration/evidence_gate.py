@@ -7,7 +7,12 @@ from typing import Any
 
 from malapp.agents.base import AgentResult
 from malapp.agents.evidence_contract import AGENT_ORDER
-from malapp.orchestration.planner import InvestigationPlan
+from malapp.orchestration.planner import (
+    InvestigationPlan,
+    has_business_signal,
+    has_impersonation_signal,
+    has_network_signal,
+)
 
 IOC_MISSING_MARKERS = (
     "threat_intel_records",
@@ -63,13 +68,25 @@ def _ran(result: AgentResult | None) -> bool:
     return bool(result) and result.status == "completed" and result.failure_type != "skipped_by_plan"
 
 
+def _ops_disabled(plan: InvestigationPlan, results: dict[str, AgentResult], name: str) -> bool:
+    result = results.get(name)
+    if result is not None and result.failure_type == "disabled":
+        return True
+    agent_plan = plan.agents.get(name)
+    return bool(agent_plan and agent_plan.reason_code == "disabled_agent_override")
+
+
 def evaluate_evidence_gate(
     plan: InvestigationPlan,
     results: list[AgentResult],
     *,
+    sample: dict[str, Any] | None = None,
+    iocs: list[dict[str, Any]] | None = None,
     executed_tools: dict[str, list[str]] | None = None,
 ) -> EvidenceGateResult:
     by_agent = _result_map(results)
+    sample = sample or {}
+    iocs = iocs or []
     executed_tools = executed_tools or {}
     missing: list[str] = []
     reasons: list[str] = []
@@ -78,12 +95,13 @@ def evaluate_evidence_gate(
     focus = set(plan.risk_focus)
 
     static = by_agent.get("static_analysis")
-    if not _ran(static):
+    if not _ran(static) and not _ops_disabled(plan, by_agent, "static_analysis"):
         missing.append("static_analysis")
         reasons.append("static_evidence_missing")
         suggested_agents.append("static_analysis")
 
-    if "network_ioc" in focus:
+    threat_needed = "network_ioc" in focus or has_network_signal(sample, iocs)
+    if threat_needed and not _ops_disabled(plan, by_agent, "threat_intel"):
         threat = by_agent.get("threat_intel")
         threat_missing = _missing_fields(threat)
         ioc_missing = [item for item in threat_missing if any(marker in item for marker in IOC_MISSING_MARKERS)]
@@ -99,7 +117,8 @@ def evaluate_evidence_gate(
                     suggested_tools.append(tool)
                     suggested_agents.append("threat_intel")
 
-    if "impersonation" in focus:
+    impersonation_needed = "impersonation" in focus or has_impersonation_signal(sample)
+    if impersonation_needed and not _ops_disabled(plan, by_agent, "impersonation"):
         impersonation = by_agent.get("impersonation")
         impersonation_missing = _missing_fields(impersonation)
         asset_missing = [
@@ -118,6 +137,14 @@ def evaluate_evidence_gate(
                 if tool not in executed_tools.get("impersonation", []):
                     suggested_tools.append(tool)
                     suggested_agents.append("impersonation")
+
+    business_needed = "business_label" in focus or has_business_signal(sample)
+    if business_needed and not _ops_disabled(plan, by_agent, "business_label"):
+        business = by_agent.get("business_label")
+        if not _ran(business):
+            missing.append("business_label")
+            reasons.append("business_agent_skipped")
+            suggested_agents.append("business_label")
 
     unique_agents = [name for name in AGENT_ORDER if name in dict.fromkeys(suggested_agents)]
     unique_tools = list(dict.fromkeys(suggested_tools))

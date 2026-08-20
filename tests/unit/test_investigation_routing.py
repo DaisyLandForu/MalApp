@@ -35,6 +35,14 @@ class RecordingAgent:
         return AgentResult(self.name, "completed", 0.4, [block], 0.8, artifacts=artifacts)
 
 
+class FlakyOnceAgent(RecordingAgent):
+    def run(self, context: AgentContext) -> AgentResult:
+        if self.calls == 0:
+            self.calls += 1
+            raise RuntimeError("first-round failure")
+        return super().run(context)
+
+
 class InvestigationRoutingTest(unittest.TestCase):
     def setUp(self) -> None:
         self.agents = [RecordingAgent(name) for name in AGENT_ORDER]
@@ -257,6 +265,33 @@ class InvestigationRoutingTest(unittest.TestCase):
             self.assertTrue(report["agents"][name]["trace"], name)
         threat = next(item for item in results if item.agent_name == "threat_intel")
         self.assertEqual(threat.status, "completed")
+
+    def test_replan_concatenates_same_agent_traces(self) -> None:
+        agents = [FlakyOnceAgent("static_analysis"), *[RecordingAgent(name) for name in AGENT_ORDER[1:]]]
+        with patch.dict(
+            "os.environ",
+            {"MALAPP_PLANNER_ENABLED": "1", "MALAPP_PLANNER_MODE": "rule", "MALAPP_TOOL_RUNTIME_ENABLED": "0"},
+            clear=False,
+        ):
+            _blocks, report, results = run_investigation(
+                {
+                    "sample_id": "retry-trace",
+                    "package_name": "com.example.app",
+                    "signature_status": "valid",
+                    "agent_runtime_config": {"agents": {"static_analysis": {"max_retries": 0}}},
+                },
+                [],
+                run_id="run-retry-trace",
+                agents=agents,
+            )
+        static = next(item for item in results if item.agent_name == "static_analysis")
+        self.assertEqual(static.status, "completed")
+        self.assertEqual(agents[0].calls, 2)
+        self.assertEqual(report["investigation"]["recovery_used"], 1)
+        phases = [event.get("phase") for event in report["agents"]["static_analysis"]["trace"]]
+        self.assertGreaterEqual(phases.count("registered"), 2)
+        self.assertIn("failed", phases)
+        self.assertIn("completed", phases)
 
 
 if __name__ == "__main__":

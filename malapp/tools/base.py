@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
-from typing import Any, Callable, Protocol
+from typing import Any, Protocol
 
 
 def digest_value(value: Any) -> str:
@@ -27,6 +28,14 @@ class ToolCall:
     arguments: dict[str, Any] = field(default_factory=dict)
 
 
+TOOL_PHASE_BY_STATUS = {
+    "completed": "tool_call_finished",
+    "failed": "tool_call_failed",
+    "timeout": "tool_call_timeout",
+    "denied": "tool_call_denied",
+}
+
+
 @dataclass
 class ToolObservation:
     tool_name: str
@@ -40,9 +49,13 @@ class ToolObservation:
     error: str = ""
     plan_id: str = ""
     run_id: str = ""
+    phase: str = ""
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        payload = asdict(self)
+        payload["facts"] = dict(self.facts)
+        payload["phase"] = self.phase or TOOL_PHASE_BY_STATUS.get(self.status, self.status)
+        return payload
 
 
 @dataclass
@@ -50,12 +63,14 @@ class ToolExecutionResult:
     observations: list[ToolObservation] = field(default_factory=list)
     denied: list[str] = field(default_factory=list)
     facts: dict[str, Any] = field(default_factory=dict)
+    events: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "observations": [item.to_dict() for item in self.observations],
             "denied": list(self.denied),
-            "facts": dict(self.facts),
+            "facts": {name: dict(value) if isinstance(value, dict) else value for name, value in self.facts.items()},
+            "events": [dict(item) for item in self.events],
         }
 
 

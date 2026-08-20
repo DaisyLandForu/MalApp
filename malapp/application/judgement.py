@@ -30,7 +30,7 @@ from malapp.orchestration.debate import run_debate
 from malapp.orchestration.decision import collaborative_decision
 from malapp.orchestration.degradation import apply_degradation_policy, evaluate_degradation
 from malapp.orchestration.pipeline import PipelineStateMachine
-from malapp.orchestration.planner import orchestration_mode
+from malapp.orchestration.planner import orchestration_mode, tool_runtime_enabled
 from malapp.rag import rag_context_for_sample
 
 ROOT = PROJECT_ROOT
@@ -1209,6 +1209,9 @@ def cached_report_usable(
     )
     if cached_mode != expected_mode:
         return False
+    cached_tools = bool((cached.get("execution") or {}).get("tool_runtime_enabled"))
+    if cached_tools != tool_runtime_enabled():
+        return False
     cache_has_learned_agent_scores = any(
         item.get("evidence_type") == "xgboost_domain_probability"
         for block in cached.get("evidence_blocks", [])
@@ -1342,6 +1345,7 @@ def build_engine_c_skipped_report(
             "run_id": pipeline.run_id,
             "orchestrator": "agent_runtime",
             "orchestration_mode": orchestration_mode(),
+            "tool_runtime_enabled": tool_runtime_enabled(),
             "entrypoint": entrypoint,
             "service_pipeline": "malapp.agent-runtime.v2",
             "history_reused": False,
@@ -1800,6 +1804,7 @@ def execute_judgement(raw_sample: dict[str, Any], *, entrypoint: str = "internal
             "run_id": run_id,
             "orchestrator": "agent_runtime",
             "orchestration_mode": orchestration_mode(),
+            "tool_runtime_enabled": tool_runtime_enabled(),
             "entrypoint": entrypoint,
             "service_pipeline": "malapp.agent-runtime.v2",
             "history_reused": False,

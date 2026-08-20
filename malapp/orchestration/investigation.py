@@ -347,7 +347,13 @@ def _combine_runtime_reports(first: dict[str, Any], second: dict[str, Any]) -> d
     combined["lifecycle"] = list(combined.get("lifecycle") or []) + list(extra.get("lifecycle") or [])
     agents = dict(combined.get("agents") if isinstance(combined.get("agents"), dict) else {})
     for name, state in (extra.get("agents") if isinstance(extra.get("agents"), dict) else {}).items():
-        agents[name] = state
+        previous = agents.get(name)
+        if isinstance(previous, dict) and isinstance(state, dict):
+            merged_state = dict(state)
+            merged_state["trace"] = list(previous.get("trace") or []) + list(state.get("trace") or [])
+            agents[name] = merged_state
+        else:
+            agents[name] = state
     combined["agents"] = agents
     try:
         combined["latency_ms"] = round(float(combined.get("latency_ms") or 0) + float(extra.get("latency_ms") or 0), 3)

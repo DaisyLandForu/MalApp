@@ -21,8 +21,6 @@ def variant_mapping(sample: dict[str, Any], **_: Any) -> dict[str, Any]:
 
 
 def assemble_business_analysis(facts: dict[str, dict[str, Any]], sample: dict[str, Any]) -> dict[str, Any]:
-    if facts.get("business_taxonomy") and facts.get("harm_chain") and facts.get("variant_mapping"):
-        return business.analyze_business_label(sample)
     scene = (facts.get("business_taxonomy") or {}).get("technical_scene_translation") or {
         "labels": [],
         "matched_rules": [],
@@ -40,40 +38,7 @@ def assemble_business_analysis(facts: dict[str, dict[str, Any]], sample: dict[st
         "evidence": [],
         "risk_score": 0.0,
     }
-    score = max(float(scene.get("risk_score") or 0), float(chain.get("risk_score") or 0), float(variant.get("risk_score") or 0))
-    assembled = {
-        "technical_scene_translation": scene,
-        "harm_chain": chain,
-        "variant_assessment": variant,
-    }
-    full = business.analyze_business_label(sample)
-    # Keep claim/evidence construction identical when all slices exist; otherwise reuse summary helpers via full missing mix.
-    assembled["summary"] = {
-        "risk_score": round(score, 4),
-        "business_labels": sorted(
-            set(
-                list(scene.get("labels") or [])
-                + list(chain.get("business_harm_labels") or [])
-                + list(variant.get("labels") or [])
-            )
-        ),
-        "claim": full["summary"]["claim"] if facts.keys() >= {"business_taxonomy", "harm_chain", "variant_mapping"} else (
-            "业务语义风险较高" if score >= 0.75 else "业务语义风险中等" if score >= 0.45 else "业务语义风险较低"
-        ),
-        "evidence": full["summary"]["evidence"] if len(facts) == 3 else [
-            "仅执行了部分业务分析 Tool，证据不完整。"
-        ],
-        "confidence": round(min(0.9, 0.3 + 0.2 * len(facts)), 4),
-    }
-    assembled["evidence_block"] = {
-        "agent": "business_label",
-        "claim": assembled["summary"]["claim"],
-        "evidence": assembled["summary"]["evidence"],
-        "confidence": assembled["summary"]["confidence"],
-        "score": assembled["summary"]["risk_score"],
-        "missing_fields": business.missing_fields(sample),
-    }
-    return assembled
+    return business.compose_business_analysis(scene, chain, variant, business.missing_fields(sample))
 
 
 def business_tools() -> list[FunctionTool]:

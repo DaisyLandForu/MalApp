@@ -62,22 +62,36 @@ CHAIN_STAGES = [
 
 
 def analyze_business_label(sample: dict[str, Any]) -> dict[str, Any]:
-    scene = translate_technical_features(sample)
-    chain = build_harm_chain(sample)
-    variant = determine_variant(sample)
-    score = max(scene["risk_score"], chain["risk_score"], variant["risk_score"])
+    return compose_business_analysis(
+        translate_technical_features(sample),
+        build_harm_chain(sample),
+        determine_variant(sample),
+        missing_fields(sample),
+    )
+
+
+def compose_business_analysis(
+    scene: dict[str, Any],
+    chain: dict[str, Any],
+    variant: dict[str, Any],
+    missing: list[str] | None = None,
+) -> dict[str, Any]:
+    score = max(float(scene.get("risk_score") or 0), float(chain.get("risk_score") or 0), float(variant.get("risk_score") or 0))
     evidence = []
-    if scene["labels"]:
-        evidence.append(f"技术特征映射到业务场景：{', '.join(scene['labels'])}。")
-    if chain["stages"]:
-        evidence.append("恶意行为危害动链：" + " -> ".join(stage["stage"] for stage in chain["stages"]) + "。")
-    if variant["variant_label"] != "unknown":
+    labels = list(scene.get("labels") or [])
+    if labels:
+        evidence.append(f"技术特征映射到业务场景：{', '.join(labels)}。")
+    stages = list(chain.get("stages") or [])
+    if stages:
+        evidence.append("恶意行为危害动链：" + " -> ".join(stage["stage"] for stage in stages) + "。")
+    variant_label = str(variant.get("variant_label") or "unknown")
+    if variant_label != "unknown":
         variant_name = {
             "high_confidence_variant": "高可信变种",
             "possible_variant": "疑似变种",
             "unknown": "暂未确认变种",
-        }.get(variant["variant_label"], "暂未确认变种")
-        evidence.append(f"变种判定：{variant_name}，依据 {', '.join(variant['evidence'])}。")
+        }.get(variant_label, "暂未确认变种")
+        evidence.append(f"变种判定：{variant_name}，依据 {', '.join(variant.get('evidence') or [])}。")
     if not evidence:
         evidence.append("当前样本未能映射到明确业务场景。")
     return {
@@ -86,7 +100,7 @@ def analyze_business_label(sample: dict[str, Any]) -> dict[str, Any]:
         "variant_assessment": variant,
         "summary": {
             "risk_score": round(score, 4),
-            "business_labels": sorted(set(scene["labels"] + chain["business_harm_labels"] + variant["labels"])),
+            "business_labels": sorted(set(labels + list(chain.get("business_harm_labels") or []) + list(variant.get("labels") or []))),
             "claim": label_claim(score),
             "evidence": evidence,
             "confidence": confidence(scene, chain, variant),
@@ -97,7 +111,7 @@ def analyze_business_label(sample: dict[str, Any]) -> dict[str, Any]:
             "evidence": evidence,
             "confidence": confidence(scene, chain, variant),
             "score": round(score, 4),
-            "missing_fields": missing_fields(sample),
+            "missing_fields": list(missing or []),
         },
     }
 

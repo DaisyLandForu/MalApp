@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 from collections.abc import Callable
@@ -12,6 +13,10 @@ from typing import Any, Protocol
 def digest_value(value: Any) -> str:
     payload = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def clone_facts(value: Any) -> Any:
+    return copy.deepcopy(value)
 
 
 @dataclass(frozen=True)
@@ -53,7 +58,7 @@ class ToolObservation:
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
-        payload["facts"] = dict(self.facts)
+        payload["facts"] = clone_facts(self.facts)
         payload["phase"] = self.phase or TOOL_PHASE_BY_STATUS.get(self.status, self.status)
         return payload
 
@@ -69,7 +74,7 @@ class ToolExecutionResult:
         return {
             "observations": [item.to_dict() for item in self.observations],
             "denied": list(self.denied),
-            "facts": {name: dict(value) if isinstance(value, dict) else value for name, value in self.facts.items()},
+            "facts": {name: clone_facts(value) for name, value in self.facts.items()},
             "events": [dict(item) for item in self.events],
         }
 

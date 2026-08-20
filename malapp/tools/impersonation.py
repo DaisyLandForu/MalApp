@@ -54,8 +54,6 @@ def certificate_comparison(sample: dict[str, Any], **_: Any) -> dict[str, Any]:
 
 
 def assemble_impersonation_analysis(facts: dict[str, dict[str, Any]], sample: dict[str, Any]) -> dict[str, Any]:
-    if facts.get("official_asset_match") and facts.get("package_similarity") and facts.get("certificate_comparison"):
-        return impersonation_analysis.analyze_impersonation(sample)
     official = facts.get("official_asset_match") or {}
     visual = official.get("visual_similarity") or {"matches": [], "best_match": None, "sample_icon_available": False}
     semantic = (facts.get("package_similarity") or {}).get("semantic_distance") or {

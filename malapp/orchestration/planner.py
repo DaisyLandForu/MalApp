@@ -92,7 +92,9 @@ class InvestigationPlan:
         return [name for name in AGENT_ORDER if self.agents.get(name) and self.agents[name].enabled]
 
     def tool_names(self, agent: str) -> tuple[str, ...]:
-        return tuple(self.tool_allowlist.get(agent) or REGISTERED_TOOLS.get(agent, ()))
+        if agent in self.tool_allowlist:
+            return tuple(self.tool_allowlist[agent])
+        return tuple(REGISTERED_TOOLS.get(agent, ()))
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -264,7 +266,7 @@ def validate_plan(raw: dict[str, Any] | InvestigationPlan) -> InvestigationPlan:
             if missing_static:
                 raise PlanValidationError("static tools cannot be dropped: " + ", ".join(missing_static))
             tools = tuple(dict.fromkeys((*STATIC_TOOLS, *tools)))
-        allowlist[name] = tools or REGISTERED_TOOLS[name]
+        allowlist[name] = tools
 
     risk_focus = payload.get("risk_focus") or []
     if not isinstance(risk_focus, (list, tuple)):

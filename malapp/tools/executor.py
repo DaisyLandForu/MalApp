@@ -5,7 +5,14 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from malapp.tools.base import TOOL_PHASE_BY_STATUS, ToolCall, ToolExecutionResult, ToolObservation, digest_value
+from malapp.tools.base import (
+    TOOL_PHASE_BY_STATUS,
+    ToolCall,
+    ToolExecutionResult,
+    ToolObservation,
+    clone_facts,
+    digest_value,
+)
 from malapp.tools.registry import ToolRegistry
 
 
@@ -28,8 +35,9 @@ class ToolExecutor:
         registered = set(self.registry.registered_names(agent))
         allowed = set(self.registry.effective(agent, allowlist))
         names = list(requested if requested is not None else allowlist)
+        input_payload = {"sample": sample, "iocs": list(iocs or [])}
         for name in names:
-            call = ToolCall(tool_name=name, agent=agent, arguments={"sample_id": sample.get("sample_id")})
+            call = ToolCall(tool_name=name, agent=agent, arguments=dict(input_payload))
             input_digest = digest_value({"tool": name, "agent": agent, "arguments": call.arguments})
             started = time.monotonic()
             result.events.append(
@@ -62,7 +70,7 @@ class ToolExecutor:
             tool = self.registry.get(name)
             try:
                 raw = tool.run(sample, iocs=iocs or []) if tool is not None else {}
-                facts = dict(raw) if isinstance(raw, dict) else {"value": raw}
+                facts = clone_facts(raw) if isinstance(raw, dict) else {"value": raw}
                 observation = _observation(
                     name,
                     agent,
@@ -101,7 +109,7 @@ class ToolExecutor:
             result.observations.append(observation)
             result.events.append(_event_from_observation(observation))
             if observation.status == "completed":
-                result.facts[name] = dict(observation.facts)
+                result.facts[name] = clone_facts(observation.facts)
         return result
 
 
@@ -119,7 +127,7 @@ def _observation(
     plan_id: str = "",
     run_id: str = "",
 ) -> ToolObservation:
-    copied = dict(facts or {})
+    copied = clone_facts(facts or {})
     return ToolObservation(
         tool_name=tool_name,
         agent=agent,

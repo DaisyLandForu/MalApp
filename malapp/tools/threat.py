@@ -27,6 +27,7 @@ def family_correlation(sample: dict[str, Any], **_: Any) -> dict[str, Any]:
 
 
 def assemble_threat_analysis(facts: dict[str, dict[str, Any]], sample: dict[str, Any]) -> dict[str, Any]:
+    del sample
     indicators = (facts.get("network_indicator") or facts.get("ioc_lookup") or {}).get("indicators")
     if not isinstance(indicators, dict):
         indicators = {"urls": [], "domains": [], "ips": [], "emails": [], "phones": []}
@@ -49,8 +50,6 @@ def assemble_threat_analysis(facts: dict[str, dict[str, Any]], sample: dict[str,
         "matches": [],
         "best_match": None,
     }
-    if facts.get("ioc_lookup") and facts.get("network_indicator") and facts.get("family_correlation"):
-        return threat.analyze_threat_intelligence(sample)
     summary = threat.summarize_intelligence(reputation, graph, family)
     return {
         "indicators": indicators,

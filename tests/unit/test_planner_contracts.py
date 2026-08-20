@@ -157,6 +157,13 @@ class PlannerContractTest(unittest.TestCase):
                     ["static_analysis", "threat_intel", "impersonation", "business_label"],
                 )
 
+    def test_explicit_empty_allowlist_is_preserved(self) -> None:
+        payload = v0_fixed_plan().to_dict()
+        payload["tool_allowlist"]["threat_intel"] = []
+        plan = validate_plan(payload)
+        self.assertEqual(plan.tool_names("threat_intel"), ())
+        self.assertEqual(plan.tool_names("static_analysis"), ("apk_metadata", "certificate", "sdk_inventory"))
+
 
 if __name__ == "__main__":
     unittest.main()

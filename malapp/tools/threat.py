@@ -5,28 +5,80 @@ from __future__ import annotations
 from typing import Any
 
 from malapp.agents import threat_intelligence as threat
+from malapp.tools.base import merge_observed_fields, merge_observed_iocs, snapshot_fields
 from malapp.tools.registry import FunctionTool
 
+THREAT_OBSERVED_KEYS = frozenset(
+    {
+        "control_url",
+        "controlUrl",
+        "c2_url",
+        "c2",
+        "url",
+        "download_url",
+        "downloadUrl",
+        "callback_url",
+        "landing_url",
+        "control_mailbox",
+        "controlMailbox",
+        "mailbox",
+        "email",
+        "control_phone",
+        "controlPhone",
+        "phone",
+        "urls",
+        "lt_urls",
+        "sub_urls",
+        "dynamic_nets",
+        "domains",
+        "domain",
+        "top_domains",
+        "top_domain",
+        "ips",
+        "ip",
+        "threat_intel_records",
+        "intelligence_records",
+        "ioc_records",
+        "fraud_family",
+        "family",
+        "black_family",
+        "fraud_name",
+    }
+)
 
-def network_indicator(sample: dict[str, Any], **_: Any) -> dict[str, Any]:
-    return {"indicators": threat.extract_network_indicators(sample)}
+
+def _threat_observation(sample: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+    return {
+        "observed_fields": snapshot_fields(sample, THREAT_OBSERVED_KEYS),
+        "observed_iocs": list(kwargs.get("iocs") or []),
+    }
 
 
-def ioc_lookup(sample: dict[str, Any], **_: Any) -> dict[str, Any]:
+def network_indicator(sample: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+    return {"indicators": threat.extract_network_indicators(sample), **_threat_observation(sample, **kwargs)}
+
+
+def ioc_lookup(sample: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
     indicators = threat.extract_network_indicators(sample)
     records = threat.normalize_intelligence_records(
         sample.get("threat_intel_records") or sample.get("intelligence_records") or []
     )
     reputation = threat.evaluate_reputation(indicators, records)
     graph = threat.build_social_graph(sample, indicators, records)
-    return {"indicators": indicators, "records": records, "reputation": reputation, "social_graph": graph}
+    return {
+        "indicators": indicators,
+        "records": records,
+        "reputation": reputation,
+        "social_graph": graph,
+        **_threat_observation(sample, **kwargs),
+    }
 
 
-def family_correlation(sample: dict[str, Any], **_: Any) -> dict[str, Any]:
-    return {"family_attribution": threat.match_family_features(sample)}
+def family_correlation(sample: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+    return {"family_attribution": threat.match_family_features(sample), **_threat_observation(sample, **kwargs)}
 
 
-def assemble_threat_analysis(facts: dict[str, dict[str, Any]], sample: dict[str, Any]) -> dict[str, Any]:
+def assemble_threat_analysis(facts: dict[str, dict[str, Any]], sample: dict[str, Any] | None = None) -> dict[str, Any]:
     del sample
     indicators = (facts.get("network_indicator") or facts.get("ioc_lookup") or {}).get("indicators")
     if not isinstance(indicators, dict):
@@ -67,6 +119,8 @@ def assemble_threat_analysis(facts: dict[str, dict[str, Any]], sample: dict[str,
             "missing_fields": summary["missing_fields"],
         },
         "records_count": len(records) if isinstance(records, list) else 0,
+        "observed_fields": merge_observed_fields(facts),
+        "observed_iocs": merge_observed_iocs(facts),
     }
 
 

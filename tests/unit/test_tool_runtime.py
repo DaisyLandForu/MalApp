@@ -21,6 +21,18 @@ from malapp.tools.registry import FunctionTool, ToolRegistry, default_registry
 from malapp.tools.threat import assemble_threat_analysis, family_correlation, ioc_lookup, network_indicator
 
 
+def _block_payload(result) -> dict:
+    block = result.evidence[0]
+    return {
+        "score": result.score,
+        "confidence": result.confidence,
+        "claim": block.claim,
+        "evidence": list(block.evidence),
+        "missing_fields": list(block.missing_fields),
+        "evidence_items": list(block.evidence_items),
+    }
+
+
 class _TimeoutTool:
     spec = ToolSpec("ioc_lookup", "threat_intel")
 
@@ -198,7 +210,10 @@ class ToolRuntimeTest(unittest.TestCase):
             _blocks_a, _report_a, legacy = run_investigation(sample, [], run_id="run-p8-legacy", agents=agents())
         with patch.dict("os.environ", {"MALAPP_PLANNER_ENABLED": "0", "MALAPP_TOOL_RUNTIME_ENABLED": "1"}):
             _blocks_b, tooled_report, tooled = run_investigation(sample, [], run_id="run-p8-tools", agents=agents())
-        self.assertEqual(legacy[0].score, tooled[0].score)
+        self.assertEqual(len(legacy), len(tooled))
+        for left, right in zip(legacy, tooled, strict=True):
+            self.assertEqual(_block_payload(left), _block_payload(right), left.agent_name)
+            self.assertTrue(right.evidence[0].evidence_items, left.agent_name)
         self.assertEqual(
             legacy[1].artifacts["threat_intelligence"]["indicators"],
             tooled[1].artifacts["threat_intelligence"]["indicators"],
@@ -294,6 +309,129 @@ class ToolRuntimeTest(unittest.TestCase):
         self.assertNotIn("c2.example.test", str(result.artifacts["threat_intelligence"]["indicators"]))
         self.assertNotIn("c2.example.test", " ".join(result.evidence[0].evidence))
         self.assertNotIn("c2.example.test", result.evidence[0].claim)
+        self.assertTrue(result.evidence[0].evidence_items)
+
+    def test_forged_impersonation_and_business_facts_ignore_raw_sample(self) -> None:
+        from malapp.agents.base import AgentContext
+        from malapp.agents.domain import BusinessLabelAgent, ImpersonationAgent
+        from malapp.application.judgement import business_label_agent, impersonation_agent
+
+        sample = {
+            "sample_id": "causal-domain",
+            "fake_app": True,
+            "app_name": "Fast Loan",
+            "package_name": "com.fast.loan.update",
+            "virus_name": "loan fraud trojan",
+            "fraud_category_big": "诈骗",
+            "fraud_family": "loan-gang",
+            "official_app_assets": [
+                {
+                    "brand": "Secure Wallet",
+                    "app_name": "Secure Wallet",
+                    "package_name": "com.secure.wallet",
+                    "icon_hash": "a" * 64,
+                    "icon_text": "Secure Wallet",
+                }
+            ],
+        }
+        benign_visual = {"matches": [], "best_match": None, "sample_icon_available": False}
+        benign_semantic = {"matches": [], "best_match": None}
+        benign_asset = {"asset_count": 0, "candidates": [], "best_match": None}
+        impersonation = assemble_impersonation_analysis(
+            {
+                "official_asset_match": {
+                    "visual_similarity": benign_visual,
+                    "official_asset_match": benign_asset,
+                },
+                "package_similarity": {"semantic_distance": benign_semantic},
+                "certificate_comparison": {},
+            },
+            sample,
+        )
+        self.assertNotIn("样本已有仿冒应用标记", impersonation["assessment"]["evidence"])
+        self.assertLess(impersonation["assessment"]["impersonation_probability"], 0.18)
+
+        def forged_official(sample, **_):
+            del sample
+            return {"visual_similarity": benign_visual, "official_asset_match": benign_asset}
+
+        def forged_package(sample, **_):
+            del sample
+            return {"semantic_distance": benign_semantic}
+
+        def forged_cert(sample, **_):
+            del sample
+            return {"sample_signature": "", "certificate_matches": [], "match_count": 0}
+
+        impersonation_result = ImpersonationAgent(impersonation_agent).run(
+            AgentContext(
+                sample=sample,
+                metadata={
+                    "tool_registry": ToolRegistry(
+                        [
+                            FunctionTool("official_asset_match", "impersonation", forged_official),
+                            FunctionTool("package_similarity", "impersonation", forged_package),
+                            FunctionTool("certificate_comparison", "impersonation", forged_cert),
+                        ]
+                    ),
+                    "tool_allowlist": {
+                        "impersonation": ["official_asset_match", "package_similarity", "certificate_comparison"]
+                    },
+                },
+                request_id="run-causal-impersonation",
+            )
+        )
+        evidence_text = " ".join(impersonation_result.evidence[0].evidence)
+        self.assertNotIn("样本已有仿冒应用标记", evidence_text)
+        self.assertNotIn("fakeApp/仿冒应用标记", evidence_text)
+        self.assertLess(impersonation_result.score or 0, 0.18)
+
+        empty_scene = {"labels": [], "matched_rules": [], "risk_score": 0.0}
+        empty_chain = {"stages": [], "business_harm_labels": [], "risk_score": 0.0, "complete_chain": False}
+        empty_variant = {"variant_label": "unknown", "labels": [], "evidence": [], "risk_score": 0.0}
+        business = assemble_business_analysis(
+            {
+                "business_taxonomy": {"technical_scene_translation": empty_scene},
+                "harm_chain": {"harm_chain": empty_chain},
+                "variant_mapping": {"variant_assessment": empty_variant},
+            },
+            sample,
+        )
+        self.assertEqual(business["summary"]["business_labels"], [])
+        self.assertIn("technical_features", business["evidence_block"]["missing_fields"])
+
+        def forged_taxonomy(sample, **_):
+            del sample
+            return {"technical_scene_translation": empty_scene}
+
+        def forged_harm(sample, **_):
+            del sample
+            return {"harm_chain": empty_chain}
+
+        def forged_variant(sample, **_):
+            del sample
+            return {"variant_assessment": empty_variant}
+
+        business_result = BusinessLabelAgent(business_label_agent).run(
+            AgentContext(
+                sample=sample,
+                metadata={
+                    "tool_registry": ToolRegistry(
+                        [
+                            FunctionTool("business_taxonomy", "business_label", forged_taxonomy),
+                            FunctionTool("harm_chain", "business_label", forged_harm),
+                            FunctionTool("variant_mapping", "business_label", forged_variant),
+                        ]
+                    ),
+                    "tool_allowlist": {"business_label": ["business_taxonomy", "harm_chain", "variant_mapping"]},
+                },
+                request_id="run-causal-business",
+            )
+        )
+        business_text = " ".join(business_result.evidence[0].evidence + [business_result.evidence[0].claim])
+        self.assertNotIn("loan fraud trojan", business_text)
+        self.assertNotIn("诈骗", business_text)
+        self.assertEqual(business_result.score, 0.0)
 
     def test_ioc_lookup_timeout_does_not_backfill_legacy_analysis(self) -> None:
         from malapp.agents.base import AgentContext

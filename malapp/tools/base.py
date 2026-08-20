@@ -19,6 +19,36 @@ def clone_facts(value: Any) -> Any:
     return copy.deepcopy(value)
 
 
+def snapshot_fields(sample: dict[str, Any], keys: frozenset[str] | tuple[str, ...]) -> dict[str, Any]:
+    observed: dict[str, Any] = {}
+    for key in keys:
+        if key in sample and sample[key] not in ("", None, [], {}, ()):
+            observed[key] = copy.deepcopy(sample[key])
+    return observed
+
+
+def merge_observed_fields(facts: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    merged: dict[str, Any] = {}
+    for payload in facts.values():
+        if not isinstance(payload, dict):
+            continue
+        fields = payload.get("observed_fields")
+        if isinstance(fields, dict):
+            merged.update(clone_facts(fields))
+    return merged
+
+
+def merge_observed_iocs(facts: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    for payload in facts.values():
+        if not isinstance(payload, dict):
+            continue
+        for item in payload.get("observed_iocs") or []:
+            if isinstance(item, dict) and item not in merged:
+                merged.append(clone_facts(item))
+    return merged
+
+
 @dataclass(frozen=True)
 class ToolSpec:
     name: str

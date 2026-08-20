@@ -5,7 +5,42 @@ from __future__ import annotations
 from typing import Any
 
 from malapp.agents import impersonation as impersonation_analysis
+from malapp.tools.base import merge_observed_fields, snapshot_fields
 from malapp.tools.registry import FunctionTool
+
+IMPERSONATION_OBSERVED_KEYS = frozenset(
+    {
+        "fake_app",
+        "fakeApp",
+        "impersonation_flag",
+        "is_fake_app",
+        "app_name",
+        "appname",
+        "appname_unify",
+        "name",
+        "package_name",
+        "packagename",
+        "pkg_name",
+        "appid",
+        "official_app_name",
+        "genuine_app_name",
+        "genuine_name",
+        "official_pkg",
+        "genuine_pkg",
+        "genuine_package",
+        "official_md5",
+        "genuine_md5",
+        "official_icon",
+        "genuine_icon",
+        "brand_similarity",
+        "icon_similarity",
+        "name_similarity",
+        "icon_hash",
+        "icon_text",
+        "icon_path",
+        "icon_base64",
+    }
+)
 
 
 def _assets(sample: dict[str, Any]) -> list[dict[str, Any]]:
@@ -22,12 +57,16 @@ def official_asset_match(sample: dict[str, Any], **_: Any) -> dict[str, Any]:
     return {
         "visual_similarity": visual,
         "official_asset_match": impersonation_analysis.match_official_assets(sample, assets, visual, semantic),
+        "observed_fields": snapshot_fields(sample, IMPERSONATION_OBSERVED_KEYS),
     }
 
 
 def package_similarity(sample: dict[str, Any], **_: Any) -> dict[str, Any]:
     assets = _assets(sample)
-    return {"semantic_distance": impersonation_analysis.semantic_distance(sample, assets)}
+    return {
+        "semantic_distance": impersonation_analysis.semantic_distance(sample, assets),
+        "observed_fields": snapshot_fields(sample, IMPERSONATION_OBSERVED_KEYS),
+    }
 
 
 def certificate_comparison(sample: dict[str, Any], **_: Any) -> dict[str, Any]:
@@ -50,10 +89,12 @@ def certificate_comparison(sample: dict[str, Any], **_: Any) -> dict[str, Any]:
         "sample_signature": sample_signature,
         "certificate_matches": matches,
         "match_count": len(matches),
+        "observed_fields": snapshot_fields(sample, IMPERSONATION_OBSERVED_KEYS),
     }
 
 
-def assemble_impersonation_analysis(facts: dict[str, dict[str, Any]], sample: dict[str, Any]) -> dict[str, Any]:
+def assemble_impersonation_analysis(facts: dict[str, dict[str, Any]], sample: dict[str, Any] | None = None) -> dict[str, Any]:
+    del sample
     official = facts.get("official_asset_match") or {}
     visual = official.get("visual_similarity") or {"matches": [], "best_match": None, "sample_icon_available": False}
     semantic = (facts.get("package_similarity") or {}).get("semantic_distance") or {
@@ -61,12 +102,14 @@ def assemble_impersonation_analysis(facts: dict[str, dict[str, Any]], sample: di
         "best_match": None,
     }
     asset_match = official.get("official_asset_match") or {"asset_count": 0, "candidates": [], "best_match": None}
-    assessment = impersonation_analysis.assess_impersonation(sample, visual, semantic, asset_match)
+    observed = merge_observed_fields(facts)
+    assessment = impersonation_analysis.assess_impersonation(observed, visual, semantic, asset_match)
     return {
         "visual_similarity": visual,
         "semantic_distance": semantic,
         "official_asset_match": asset_match,
         "certificate_comparison": facts.get("certificate_comparison") or {},
+        "observed_fields": observed,
         "assessment": assessment,
         "evidence_block": {
             "agent": "impersonation",

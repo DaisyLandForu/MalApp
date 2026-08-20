@@ -73,21 +73,13 @@ def _tool_bundle(context: AgentContext, agent: str) -> tuple[Any, list[dict[str,
     return execution, [item.to_dict() for item in execution.observations], execution.facts
 
 
-def _block_from_analysis(agent: str, analysis: dict[str, Any]) -> EvidenceBlock:
-    raw = analysis.get("evidence_block") if isinstance(analysis, dict) else {}
-    raw = raw if isinstance(raw, dict) else {}
-    missing = [str(item) for item in (raw.get("missing_fields") or [])]
-    score = float(raw.get("score") or 0.0)
-    return EvidenceBlock(
-        agent=agent,
-        claim=str(raw.get("claim") or ""),
-        evidence=[str(item) for item in (raw.get("evidence") or [])],
-        confidence=float(raw.get("confidence") or 0.0),
-        missing_fields=missing,
-        score=score,
-        status="insufficient_evidence" if missing else "ok",
-        rule_score=score,
-    )
+def _evidence_view(analysis: dict[str, Any], artifact_key: str) -> dict[str, Any]:
+    from malapp.tools.base import clone_facts
+
+    observed = analysis.get("observed_fields") if isinstance(analysis, dict) else {}
+    view = clone_facts(observed) if isinstance(observed, dict) else {}
+    view[artifact_key] = analysis
+    return view
 
 
 def _tool_failure(observations: list[dict[str, Any]]) -> tuple[str, str] | None:
@@ -101,9 +93,9 @@ def _tool_failure(observations: list[dict[str, Any]]) -> tuple[str, str] | None:
 
 
 def _finish_from_tools(
-    agent: str,
-    analysis: dict[str, Any],
+    block: EvidenceBlock,
     artifact_key: str,
+    analysis: dict[str, Any],
     observations: list[dict[str, Any]],
     execution: Any,
     *,
@@ -118,14 +110,14 @@ def _finish_from_tools(
     if failure:
         failure_type, error = failure
         return completed_result(
-            _block_from_analysis(agent, analysis),
+            block,
             artifacts=artifacts,
             status="timeout" if failure_type == "timeout" else "failed",
             failure_type=failure_type,
             error=error,
         )
     return completed_result(
-        _block_from_analysis(agent, analysis),
+        block,
         artifacts=artifacts,
         expert_provider=expert_provider,
         context=context,
@@ -184,12 +176,13 @@ class ThreatIntelAgent:
             )
         from malapp.tools.threat import assemble_threat_analysis
 
-        analysis = assemble_threat_analysis(facts, sample)
-        sample["threat_intelligence"] = analysis
+        analysis = assemble_threat_analysis(facts)
+        view = _evidence_view(analysis, "threat_intelligence")
+        iocs = list(analysis.get("observed_iocs") or [])
         return _finish_from_tools(
-            self.name,
-            analysis,
+            self._analyzer(view, iocs),
             "threat_intelligence",
+            analysis,
             observations,
             execution,
             expert_provider=self._expert_provider,
@@ -218,12 +211,12 @@ class ImpersonationAgent:
             )
         from malapp.tools.impersonation import assemble_impersonation_analysis
 
-        analysis = assemble_impersonation_analysis(facts, sample)
-        sample["impersonation_analysis"] = analysis
+        analysis = assemble_impersonation_analysis(facts)
+        view = _evidence_view(analysis, "impersonation_analysis")
         return _finish_from_tools(
-            self.name,
-            analysis,
+            self._analyzer(view),
             "impersonation_analysis",
+            analysis,
             observations,
             execution,
             expert_provider=self._expert_provider,
@@ -252,12 +245,12 @@ class BusinessLabelAgent:
             )
         from malapp.tools.business import assemble_business_analysis
 
-        analysis = assemble_business_analysis(facts, sample)
-        sample["business_label_analysis"] = analysis
+        analysis = assemble_business_analysis(facts)
+        view = _evidence_view(analysis, "business_label_analysis")
         return _finish_from_tools(
-            self.name,
-            analysis,
+            self._analyzer(view),
             "business_label_analysis",
+            analysis,
             observations,
             execution,
             expert_provider=self._expert_provider,

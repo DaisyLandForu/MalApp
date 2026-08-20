@@ -38,6 +38,24 @@ class AgentDegradationTest(unittest.TestCase):
         self.assertFalse(policy["force_human_review"])
         self.assertEqual(policy["confidence_penalty"], 0.12)
 
+    def test_skipped_by_plan_does_not_penalize_confidence(self) -> None:
+        from malapp.agents.base import AgentResult, EvidenceBlock
+        from malapp.orchestration.planner import skipped_by_plan_result
+
+        completed = AgentResult(
+            "static_analysis",
+            "completed",
+            0.4,
+            [EvidenceBlock("static_analysis", "ok", ["e"], 0.8, score=0.4)],
+            0.8,
+        )
+        policy = evaluate_degradation(
+            [completed, skipped_by_plan_result("threat_intel", "insufficient_network_signal")]
+        )
+        self.assertEqual(policy["status"], "healthy")
+        self.assertEqual(policy["confidence_penalty"], 0.0)
+        self.assertFalse(policy["force_human_review"])
+
 
 if __name__ == "__main__":
     unittest.main()

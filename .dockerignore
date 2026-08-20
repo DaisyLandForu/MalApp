@@ -19,3 +19,6 @@ deploy/docker/workspace/*
 *.pdf
 *.docx
 *.xlsx
+
+plans/*
+/original_artifacts/

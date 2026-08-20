@@ -35,3 +35,4 @@ release/
 deploy/docker/workspace/*
 !deploy/docker/workspace/.gitkeep
 plans/*
+/original_artifacts/

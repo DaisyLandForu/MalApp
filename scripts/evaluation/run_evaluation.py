@@ -235,6 +235,37 @@ def cmd_gate(args: argparse.Namespace) -> None:
         raise SystemExit(1 if result["status"] == "fail" else 2)
 
 
+def cmd_trajectory_manifest(args: argparse.Namespace) -> None:
+    """Build a frozen 100-200 sample trajectory benchmark without running models."""
+    from malapp.evaluation.trajectory import build_benchmark_manifest, write_json as write_traj
+
+    rows = load_validation_rows(Path(args.validation_csv))
+    manifest = build_benchmark_manifest(
+        rows,
+        size=args.size,
+        runtime_snapshot_id=args.runtime_snapshot_id,
+    )
+    output = Path(args.output) if args.output else Path("outputs") / "evaluation" / "trajectory_benchmark.json"
+    write_traj(output, manifest)
+    print_json({"output": str(output), "size": manifest["size"], "strata": manifest["strata"]})
+
+
+def cmd_trajectory_score(args: argparse.Namespace) -> None:
+    """Score already persisted judgement reports. Does not call models."""
+    from malapp.evaluation.trajectory import score_reports, write_json as write_traj
+
+    reports = []
+    if args.reports:
+        payload = read_json(Path(args.reports), [])
+        reports = payload if isinstance(payload, list) else payload.get("reports") or payload.get("trajectories") or []
+    else:
+        reports = load_reports(Path(args.data_dir) if args.data_dir else None)
+    result = score_reports(reports)
+    if args.output:
+        write_traj(Path(args.output), result)
+    print_json(result.get("comparison") or result)
+
+
 def variant_config(args: argparse.Namespace) -> dict[str, Any]:
     variants = evaluation_plan()["experiment_variants"]
     if args.variant not in variants:
@@ -279,6 +310,33 @@ def variant_config(args: argparse.Namespace) -> dict[str, Any]:
                 },
                 "agent_runtime_faults": {args.inject_agent_failure: {"failures": 1}},
             },
+        )
+    mode = str(getattr(args, "orchestration_mode", "") or "").strip().lower()
+    if mode in {"v0", "v0_fixed"}:
+        environment.update(
+            {
+                "MALAPP_PLANNER_ENABLED": "0",
+                "MALAPP_TOOL_RUNTIME_ENABLED": "0",
+                "MALAPP_ORCHESTRATION_MODE": "v0_fixed",
+            }
+        )
+    elif mode in {"v1", "v1_planner"}:
+        environment.update(
+            {
+                "MALAPP_PLANNER_ENABLED": "1",
+                "MALAPP_PLANNER_MODE": "rule",
+                "MALAPP_TOOL_RUNTIME_ENABLED": "0",
+                "MALAPP_ORCHESTRATION_MODE": "v1_planner",
+            }
+        )
+    elif mode in {"v2", "v2_planner_tools"}:
+        environment.update(
+            {
+                "MALAPP_PLANNER_ENABLED": "1",
+                "MALAPP_PLANNER_MODE": "rule",
+                "MALAPP_TOOL_RUNTIME_ENABLED": "1",
+                "MALAPP_ORCHESTRATION_MODE": "v2_planner_tools",
+            }
         )
     selected["environment"] = environment
     selected["sample_overrides"] = sample_overrides
@@ -746,6 +804,24 @@ def parser() -> argparse.ArgumentParser:
     gate.add_argument("--output", default="", help="write the signed gate report JSON")
     gate.set_defaults(func=cmd_gate)
 
+    traj_manifest = sub.add_parser(
+        "trajectory-manifest",
+        help="freeze a 100-200 sample trajectory benchmark without running models",
+    )
+    traj_manifest.add_argument("--size", type=int, default=150)
+    traj_manifest.add_argument("--runtime-snapshot-id", default="")
+    traj_manifest.add_argument("--output", default="")
+    traj_manifest.set_defaults(func=cmd_trajectory_manifest)
+
+    traj_score = sub.add_parser(
+        "trajectory-score",
+        help="score existing reports for V0/V1/V2 trajectory metrics; does not call models",
+    )
+    traj_score.add_argument("--data-dir", default="")
+    traj_score.add_argument("--reports", default="", help="optional JSON list of reports")
+    traj_score.add_argument("--output", default="")
+    traj_score.set_defaults(func=cmd_trajectory_score)
+
     run = sub.add_parser("run", help="run one resumable experiment variant")
     run.add_argument("--variant", default="full")
     run.add_argument("--plan-version", default="v1")
@@ -807,6 +883,12 @@ def parser() -> argparse.ArgumentParser:
         "--inject-agent-failure",
         choices=["static_analysis", "threat_intel", "impersonation", "business_label"],
         default="",
+    )
+    run.add_argument(
+        "--orchestration-mode",
+        choices=["v0", "v1", "v2", "v0_fixed", "v1_planner", "v2_planner_tools"],
+        default="",
+        help="set Planner/Tool flags without invoking a new experiment family",
     )
     run.add_argument("--stop-on-error", action="store_true")
     run.add_argument(

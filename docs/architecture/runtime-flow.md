@@ -14,8 +14,13 @@ FastAPI / Batch / Hermes MCP
  A/B RESULT + REVIEW   NORMALIZE → STATIC_EXTRACTION
        │                     ↓
        │               AGENT_EXECUTION
-       │           （统一 Runtime 并行/重试/超时，
-       │             确定性工具 + 共享专家模型）
+       │           （Planner 默认关闭；开启后在 Runtime 前
+       │             生成 InvestigationPlan，跳过的 Agent
+       │             以 skipped_by_plan 占位，不走失败降级。
+       │             Evidence Gate + 最多一次 Re-plan
+       │             仍在本阶段内部完成。
+       │             统一 Runtime 并行/重试/超时，
+       │             确定性 Tool + 共享专家模型）
        │                     ↓
        │          RAG_RETRIEVAL → XGB_INFERENCE
        │                     ↓
@@ -76,4 +81,4 @@ Hermes 不拥有第二套 Agent Pipeline。它只把 MCP 参数转换为 `Judgem
 
 ## 缓存
 
-研判会使用严格样本缓存和可选 MD5 历史缓存。修改模型、Prompt、Artifact 或报告 schema 时，应同步更新缓存签名，防止跨版本复用旧结果。
+研判会使用严格样本缓存和可选 MD5 历史缓存。缓存命中还要求 `execution.orchestration_mode` 一致（`v0_fixed` / `v1_planner` / `v2_planner_tools`），避免 Planner 关闭与开启之间复用旧报告。修改模型、Prompt、Artifact 或报告 schema 时，应同步更新缓存签名，防止跨版本复用旧结果。

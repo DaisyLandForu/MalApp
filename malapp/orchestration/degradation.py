@@ -25,6 +25,8 @@ def evaluate_degradation(results: list[AgentResult]) -> dict[str, Any]:
         if result.status == "completed":
             continue
         failure_type = str(result.failure_type or result.status or "unknown")
+        if failure_type == "skipped_by_plan":
+            continue
         if result.agent_name == "static_analysis":
             penalty, severity, action = 0.25, "critical", "force_human_review"
         elif result.agent_name == "threat_intel":

@@ -10,6 +10,7 @@ from malapp.agents import impersonation as impersonation_analysis
 from malapp.agents import threat_intelligence as threat_intelligence_analysis
 from malapp.agents.base import AgentContext, AgentResult, EvidenceBlock
 from malapp.inference.expert import ExpertModelProvider
+from malapp.orchestration.planner import REGISTERED_TOOLS
 
 SampleAnalyzer = Callable[[dict[str, Any]], EvidenceBlock]
 ThreatAnalyzer = Callable[[dict[str, Any], list[dict[str, Any]]], EvidenceBlock]
@@ -41,6 +42,26 @@ def completed_result(
     )
 
 
+def _tool_bundle(context: AgentContext, agent: str) -> tuple[Any, list[dict[str, Any]], dict[str, dict[str, Any]]]:
+    metadata = context.metadata if isinstance(context.metadata, dict) else {}
+    registry = metadata.get("tool_registry")
+    if registry is None:
+        return None, [], {}
+    allowlist = metadata.get("tool_allowlist") or {}
+    names = list(allowlist.get(agent) or REGISTERED_TOOLS.get(agent, ()))
+    from malapp.tools.executor import ToolExecutor
+
+    execution = ToolExecutor(registry).execute(
+        agent,
+        names,
+        dict(context.sample),
+        iocs=list(context.iocs),
+        plan_id=str(metadata.get("plan_id") or ""),
+        run_id=context.request_id,
+    )
+    return execution, [item.to_dict() for item in execution.observations], execution.facts
+
+
 class StaticAnalysisAgent:
     name = "static_analysis"
 
@@ -49,9 +70,18 @@ class StaticAnalysisAgent:
         self._expert_provider = expert_provider
 
     def run(self, context: AgentContext) -> AgentResult:
+        execution, observations, facts = _tool_bundle(context, self.name)
+        artifacts: dict[str, Any] = {}
+        if observations:
+            artifacts["tool_observations"] = observations
+            artifacts["tool_execution"] = execution.to_dict() if execution is not None else {}
         return completed_result(
-            self._analyzer(context.sample), expert_provider=self._expert_provider, context=context
+            self._analyzer(context.sample),
+            artifacts=artifacts,
+            expert_provider=self._expert_provider,
+            context=context,
         )
+
 
 class ThreatIntelAgent:
     name = "threat_intel"
@@ -62,12 +92,21 @@ class ThreatIntelAgent:
 
     def run(self, context: AgentContext) -> AgentResult:
         sample = dict(context.sample)
-        analysis = threat_intelligence_analysis.analyze_threat_intelligence(sample)
+        execution, observations, facts = _tool_bundle(context, self.name)
+        if facts:
+            from malapp.tools.threat import assemble_threat_analysis
+
+            analysis = assemble_threat_analysis(facts, sample)
+        else:
+            analysis = threat_intelligence_analysis.analyze_threat_intelligence(sample)
         sample["threat_intelligence"] = analysis
-        block = self._analyzer(sample, list(context.iocs))
+        artifacts: dict[str, Any] = {"threat_intelligence": analysis}
+        if observations:
+            artifacts["tool_observations"] = observations
+            artifacts["tool_execution"] = execution.to_dict() if execution is not None else {}
         return completed_result(
-            block,
-            artifacts={"threat_intelligence": analysis},
+            self._analyzer(sample, list(context.iocs)),
+            artifacts=artifacts,
             expert_provider=self._expert_provider,
             context=context,
         )
@@ -82,12 +121,21 @@ class ImpersonationAgent:
 
     def run(self, context: AgentContext) -> AgentResult:
         sample = dict(context.sample)
-        analysis = impersonation_analysis.analyze_impersonation(sample)
+        execution, observations, facts = _tool_bundle(context, self.name)
+        if facts:
+            from malapp.tools.impersonation import assemble_impersonation_analysis
+
+            analysis = assemble_impersonation_analysis(facts, sample)
+        else:
+            analysis = impersonation_analysis.analyze_impersonation(sample)
         sample["impersonation_analysis"] = analysis
-        block = self._analyzer(sample)
+        artifacts: dict[str, Any] = {"impersonation_analysis": analysis}
+        if observations:
+            artifacts["tool_observations"] = observations
+            artifacts["tool_execution"] = execution.to_dict() if execution is not None else {}
         return completed_result(
-            block,
-            artifacts={"impersonation_analysis": analysis},
+            self._analyzer(sample),
+            artifacts=artifacts,
             expert_provider=self._expert_provider,
             context=context,
         )
@@ -102,12 +150,21 @@ class BusinessLabelAgent:
 
     def run(self, context: AgentContext) -> AgentResult:
         sample = dict(context.sample)
-        analysis = business_label_analysis.analyze_business_label(sample)
+        execution, observations, facts = _tool_bundle(context, self.name)
+        if facts:
+            from malapp.tools.business import assemble_business_analysis
+
+            analysis = assemble_business_analysis(facts, sample)
+        else:
+            analysis = business_label_analysis.analyze_business_label(sample)
         sample["business_label_analysis"] = analysis
-        block = self._analyzer(sample)
+        artifacts: dict[str, Any] = {"business_label_analysis": analysis}
+        if observations:
+            artifacts["tool_observations"] = observations
+            artifacts["tool_execution"] = execution.to_dict() if execution is not None else {}
         return completed_result(
-            block,
-            artifacts={"business_label_analysis": analysis},
+            self._analyzer(sample),
+            artifacts=artifacts,
             expert_provider=self._expert_provider,
             context=context,
         )

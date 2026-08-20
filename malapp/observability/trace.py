@@ -147,6 +147,7 @@ def build_agent_trace(report: dict[str, Any]) -> dict[str, Any]:
             "rag_context": evidence_layers.get("rag_context"),
         },
         "agent_runtime": preprocess.get("agent_runtime") or {},
+        "investigation": (preprocess.get("agent_runtime") or {}).get("investigation") or {},
         "pipeline": execution.get("pipeline") or {},
         "degradation": report.get("degradation") or {},
         "agent_outputs": report.get("evidence_blocks") or [],

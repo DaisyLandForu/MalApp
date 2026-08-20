@@ -1060,6 +1060,32 @@ def evaluation_plan() -> dict[str, Any]:
                     },
                 },
             },
+            "orchestration_v0": {
+                "description": "Fixed four-agent fan-out without Planner",
+                "environment": {
+                    "MALAPP_PLANNER_ENABLED": "0",
+                    "MALAPP_TOOL_RUNTIME_ENABLED": "0",
+                    "MALAPP_ORCHESTRATION_MODE": "v0_fixed",
+                },
+            },
+            "orchestration_v1": {
+                "description": "Rule Planner routing without tool trimming",
+                "environment": {
+                    "MALAPP_PLANNER_ENABLED": "1",
+                    "MALAPP_PLANNER_MODE": "rule",
+                    "MALAPP_TOOL_RUNTIME_ENABLED": "0",
+                    "MALAPP_ORCHESTRATION_MODE": "v1_planner",
+                },
+            },
+            "orchestration_v2": {
+                "description": "Rule Planner plus deterministic tool protocol",
+                "environment": {
+                    "MALAPP_PLANNER_ENABLED": "1",
+                    "MALAPP_PLANNER_MODE": "rule",
+                    "MALAPP_TOOL_RUNTIME_ENABLED": "1",
+                    "MALAPP_ORCHESTRATION_MODE": "v2_planner_tools",
+                },
+            },
         },
     }
 

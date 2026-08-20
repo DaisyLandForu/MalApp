@@ -30,7 +30,7 @@ from malapp.orchestration.debate import run_debate
 from malapp.orchestration.decision import collaborative_decision
 from malapp.orchestration.degradation import apply_degradation_policy, evaluate_degradation
 from malapp.orchestration.pipeline import PipelineStateMachine
-from malapp.orchestration.runtime import AgentRegistry, AgentRuntime
+from malapp.orchestration.planner import orchestration_mode
 from malapp.rag import rag_context_for_sample
 
 ROOT = PROJECT_ROOT
@@ -1158,30 +1158,22 @@ def run_agents(
     run_id: str,
 ) -> tuple[list[EvidenceBlock], dict[str, Any], list[AgentResult]]:
     from malapp.inference.expert import ExpertModelProvider
+    from malapp.orchestration.investigation import run_investigation
 
     expert_provider = ExpertModelProvider()
-    registry = AgentRegistry(
-        [
-            StaticAnalysisAgent(static_analysis_agent, expert_provider),
-            ThreatIntelAgent(threat_intel_agent, expert_provider),
-            ImpersonationAgent(impersonation_agent, expert_provider),
-            BusinessLabelAgent(business_label_agent, expert_provider),
-        ]
-    )
-    results, runtime_report = AgentRuntime(registry).execute(
+    agents = [
+        StaticAnalysisAgent(static_analysis_agent, expert_provider),
+        ThreatIntelAgent(threat_intel_agent, expert_provider),
+        ImpersonationAgent(impersonation_agent, expert_provider),
+        BusinessLabelAgent(business_label_agent, expert_provider),
+    ]
+    return run_investigation(
         sample,
-        iocs=iocs,
-        config=(
-            sample.get("agent_runtime_config")
-            if isinstance(sample.get("agent_runtime_config"), dict)
-            else {}
-        ),
+        iocs,
         run_id=run_id,
+        agents=agents,
+        expert_provider=expert_provider,
     )
-    blocks = [block for result in results for block in result.evidence]
-    runtime_report["results"] = [result.to_dict() for result in results]
-    runtime_report["expert_runtime"] = expert_provider.manifest()
-    return blocks, runtime_report, results
 
 
 def debate(evidence_blocks: list[EvidenceBlock], config: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1207,8 +1199,15 @@ def cached_report_usable(
     require_learned_agent_scores: bool,
     has_valid_md5_for_xgb: bool,
     require_model_signature: bool = False,
+    orchestration_mode_name: str | None = None,
 ) -> bool:
     if not cached:
+        return False
+    expected_mode = orchestration_mode_name or orchestration_mode()
+    cached_mode = str(
+        (cached.get("execution") or {}).get("orchestration_mode") or "v0_fixed"
+    )
+    if cached_mode != expected_mode:
         return False
     cache_has_learned_agent_scores = any(
         item.get("evidence_type") == "xgboost_domain_probability"
@@ -1342,6 +1341,7 @@ def build_engine_c_skipped_report(
         "execution": {
             "run_id": pipeline.run_id,
             "orchestrator": "agent_runtime",
+            "orchestration_mode": orchestration_mode(),
             "entrypoint": entrypoint,
             "service_pipeline": "malapp.agent-runtime.v2",
             "history_reused": False,
@@ -1554,7 +1554,7 @@ def execute_judgement(raw_sample: dict[str, Any], *, entrypoint: str = "internal
             key: value
             for result in agent_results
             for key, value in result.artifacts.items()
-            if key != "expert_review"
+            if key not in {"expert_review", "tool_observations", "tool_execution"}
         }
         threat_intelligence = artifacts.get("threat_intelligence", {})
         impersonation_analysis = artifacts.get("impersonation_analysis", {})
@@ -1799,6 +1799,7 @@ def execute_judgement(raw_sample: dict[str, Any], *, entrypoint: str = "internal
         "execution": {
             "run_id": run_id,
             "orchestrator": "agent_runtime",
+            "orchestration_mode": orchestration_mode(),
             "entrypoint": entrypoint,
             "service_pipeline": "malapp.agent-runtime.v2",
             "history_reused": False,

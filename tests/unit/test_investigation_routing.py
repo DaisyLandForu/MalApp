@@ -182,7 +182,8 @@ class InvestigationRoutingTest(unittest.TestCase):
         self.assertTrue(report["investigation"]["evidence_gate"]["sufficient"])
         self.assertTrue(report["investigation"]["evidence_gate"]["unavailable_fields"])
         self.assertFalse(any(item["phase"] == "replan_started" for item in report["investigation"]["lifecycle"]))
-        self.assertTrue(report["investigation"]["degradation"]["review_recommended"])
+        self.assertFalse(report["investigation"]["degradation"].get("review_recommended"))
+        self.assertEqual(report["investigation"]["degradation"].get("unavailable_fields"), report["investigation"]["evidence_gate"]["unavailable_fields"])
         threat = next(item for item in results if item.agent_name == "threat_intel")
         self.assertEqual(threat.status, "completed")
 

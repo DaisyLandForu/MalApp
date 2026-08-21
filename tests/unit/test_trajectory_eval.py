@@ -115,6 +115,26 @@ class TrajectoryEvalTest(unittest.TestCase):
             "rule_backend_tokens_omitted",
         )
         self.assertFalse(result["invokes_models"])
+        variants = comparison["variants"]
+        self.assertIn("review_recommended_rate", variants["v0_fixed"])
+        self.assertIn("degraded_rate", variants["v0_fixed"])
+        self.assertIn("average_confidence_penalty", variants["v0_fixed"])
+        self.assertEqual(variants["v1_planner"]["agent_skip_rate"]["impersonation"], 1.0)
+        self.assertEqual(variants["v1_planner"]["agent_skip_reasons"]["impersonation"]["skip"], 1)
+        self.assertEqual(variants["v1_planner"]["verdict_agreement_rate"], 1.0)
+
+    def test_stratum_summary_reports_skip_reasons_and_agreement(self) -> None:
+        v0 = sample_report("v0_fixed", ["static_analysis", "threat_intel", "impersonation", "business_label"], [])
+        v1 = sample_report("v1_planner", ["static_analysis"], ["threat_intel", "impersonation", "business_label"])
+        v0["sample"]["sample_id"] = "S-ioc"
+        v1["sample"]["sample_id"] = "S-ioc"
+        result = score_reports([v0, v1], stratum_by_sample={"S-ioc": "ioc"})
+        layer = result["comparison"]["by_stratum"]["ioc"]
+        self.assertEqual(layer["sample_count"], 1)
+        self.assertEqual(layer["variants"]["v1_planner"]["agent_skip_rate"]["threat_intel"], 1.0)
+        self.assertEqual(layer["variants"]["v1_planner"]["agent_skip_reasons"]["threat_intel"]["skip"], 1)
+        self.assertEqual(layer["variants"]["v1_planner"]["verdict_agreement_rate"], 1.0)
+        self.assertEqual(layer["variants"]["v1_planner"]["trajectory_success_rate"], 1.0)
 
     def test_manifest_freezes_blinded_inputs_and_actual_source(self) -> None:
         rows = []

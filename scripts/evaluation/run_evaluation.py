@@ -315,8 +315,13 @@ def cmd_trajectory_run(args: argparse.Namespace) -> None:
         )
     samples = [dict(item["blinded_input"]) for item in manifest["samples"]]
     requirements = {
-        str(item["sample_id"]): list(item.get("expected_evidence_requirements") or [])
+        str(item["sample_id"]).upper(): list(item.get("expected_evidence_requirements") or [])
         for item in manifest["samples"]
+    }
+    stratum_by_sample = {
+        str(item["sample_id"]).upper(): str(item.get("stratum") or "")
+        for item in manifest["samples"]
+        if item.get("stratum")
     }
     output_dir = Path(args.output) if args.output else Path("outputs") / "evaluation"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -326,6 +331,7 @@ def cmd_trajectory_run(args: argparse.Namespace) -> None:
         samples,
         modes=ORCHESTRATION_MODES,
         requirements_by_sample=requirements,
+        stratum_by_sample=stratum_by_sample,
         data_dir=isolated_dir,
     )
     payload = {

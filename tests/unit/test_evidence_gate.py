@@ -125,11 +125,11 @@ class EvidenceGateCalibrationTest(unittest.TestCase):
             policy,
             {"unavailable_fields": ["threat_intel_records", "official_pkg"]},
         )
-        self.assertEqual(merged["status"], "degraded")
-        self.assertTrue(merged["review_recommended"])
-        self.assertFalse(merged["force_human_review"])
+        self.assertEqual(merged["status"], "healthy")
+        self.assertFalse(merged["review_recommended"])
         self.assertGreater(merged["confidence_penalty"], 0)
         self.assertEqual(merged["unavailable_fields"], ["threat_intel_records", "official_pkg"])
+        self.assertTrue(merged["unavailable_reasons"])
 
 
 if __name__ == "__main__":

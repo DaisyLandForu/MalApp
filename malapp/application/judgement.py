@@ -1578,7 +1578,7 @@ def execute_judgement(raw_sample: dict[str, Any], *, entrypoint: str = "internal
             "artifact_keys": sorted(artifacts),
         }
         degradation_codes = [item["code"] for item in degradation_policy["reasons"]]
-        if degradation_codes:
+        if degradation_policy.get("status") == "degraded":
             pipeline.degrade("AGENT_EXECUTION", degradation_codes, agent_metadata)
         else:
             pipeline.complete(
@@ -1730,7 +1730,8 @@ def execute_judgement(raw_sample: dict[str, Any], *, entrypoint: str = "internal
             auto_predict_xgb=False,
         )
         decision = apply_degradation_policy(decision, degradation_policy)
-        if degradation_policy["status"] == "degraded":
+        degradation_policy = dict(decision.get("degradation") or degradation_policy)
+        if degradation_policy.get("status") == "degraded":
             pipeline.degrade(
                 "FINAL_DECISION",
                 [item["code"] for item in degradation_policy["reasons"]],

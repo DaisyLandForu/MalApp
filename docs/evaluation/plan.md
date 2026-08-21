@@ -513,7 +513,8 @@ python scripts/evaluation/run_evaluation.py trajectory-score --reports outputs/e
 口径：
 
 - `trajectory_success` 要求合法 verdict、**`gate.sufficient is True`**、无 Planner fallback、无缓存命中、无 Agent/Tool 失败 / denied / 参数无效
-- Evidence Gate 只把**还能用新 Agent/Tool 补上的缺口**判为不充分；样本/Tool 无法产生的字段记为 `unavailable`（降置信度 / `review_recommended`），不再空转 Re-plan
+- Evidence Gate 只把**还能用新 Agent/Tool 补上的缺口**判为不充分；样本/Tool 无法产生的字段记为 `unavailable`（降置信度；仅在接近判定边界、引擎冲突或最终置信偏低时 `review_recommended`），不再空转 Re-plan
+- 分层汇总输出每层样本数、Agent 跳过率及原因、Tool 次数、coverage、success、verdict 一致率，以及 `review_recommended_rate` / `degraded_rate` / `average_confidence_penalty`
 - `evidence_coverage` 按 `expected_evidence_requirements` 或去重 Evidence ID 计算，忽略 `skipped_by_plan` 占位
 - `agent_calls` / `agent_attempts` / `replan_agent_calls` 来自 runtime lifecycle 与 P7 两轮 trace
 - `tool_argument_valid_rate` 使用显式参数 Schema 校验，不是 status 代理

@@ -136,6 +136,15 @@ def extract_trajectory(report: dict[str, Any]) -> dict[str, Any]:
     counts = _agent_activity_counts(runtime_lifecycle, investigation_lifecycle, agent_traces, agents)
     gate = investigation.get("evidence_gate") if isinstance(investigation.get("evidence_gate"), dict) else {}
     pipeline = execution.get("pipeline") if isinstance(execution.get("pipeline"), dict) else {}
+    plan_agents = plan.get("agents") if isinstance(plan.get("agents"), dict) else {}
+    skipped_agent_reasons = {
+        name: str((plan_agents.get(name) or {}).get("reason_code") or "skipped_by_plan")
+        for name in skipped
+    }
+    decision = report.get("decision") if isinstance(report.get("decision"), dict) else {}
+    report_deg = report.get("degradation") if isinstance(report.get("degradation"), dict) else {}
+    decision_deg = decision.get("degradation") if isinstance(decision.get("degradation"), dict) else {}
+    degradation = {**report_deg, **decision_deg} if (report_deg or decision_deg) else {}
     return {
         "run_id": report.get("run_id") or execution.get("run_id") or "",
         "sample_id": (report.get("sample") or {}).get("sample_id") or (report.get("sample") or {}).get("md5") or "",
@@ -146,6 +155,7 @@ def extract_trajectory(report: dict[str, Any]) -> dict[str, Any]:
         "agents": agents,
         "selected_agents": selected,
         "skipped_agents": skipped,
+        "skipped_agent_reasons": skipped_agent_reasons,
         "agent_calls": counts["agent_calls"],
         "agent_attempts": counts["agent_attempts"],
         "agent_retries": counts["agent_retries"],
@@ -168,8 +178,12 @@ def extract_trajectory(report: dict[str, Any]) -> dict[str, Any]:
             if isinstance(block, dict)
             for field in block.get("missing_fields") or []
         ],
-        "verdict": (report.get("decision") or {}).get("verdict"),
-        "score": (report.get("decision") or {}).get("score"),
+        "verdict": decision.get("verdict"),
+        "score": decision.get("score") if decision.get("score") is not None else decision.get("final_score"),
+        "review_recommended": bool(decision.get("review_recommended") or degradation.get("review_recommended")),
+        "review_recommend_reasons": list(decision.get("review_recommend_reasons") or degradation.get("review_recommend_reasons") or []),
+        "degradation_status": str(degradation.get("status") or report_deg.get("status") or ""),
+        "confidence_penalty": _as_float(degradation.get("confidence_penalty") or report_deg.get("confidence_penalty"), 0.0) or 0.0,
         "latency_ms": _as_float(runtime.get("latency_ms") or pipeline.get("latency_ms"), 0.0) or 0.0,
         "model_backend": str((debate.get("providers") or {}).get("model_a", {}).get("backend") or debate.get("execution_mode") or ""),
         "token_usage": _token_usage(model_calls),
@@ -331,6 +345,8 @@ def score_trajectory(
     tokens = trajectory.get("token_usage") or {}
     backend = str(trajectory.get("model_backend") or "").lower()
     report_tokens = backend not in RULE_BACKENDS and int(tokens.get("model_calls") or 0) > 0
+    v0_verdict = None if v0_reference is None else str(v0_reference.get("verdict") or "")
+    current_verdict = str(trajectory.get("verdict") or "")
     return {
         "plan_valid": bool(trajectory.get("plan_valid", True)),
         "fallback": bool(trajectory.get("fallback")),
@@ -358,6 +374,10 @@ def score_trajectory(
         "invokes_models": bool(trajectory.get("invokes_models")),
         "invokes_api": bool(trajectory.get("invokes_api")),
         "cache_hit": bool(trajectory.get("cache_hit")),
+        "review_recommended": bool(trajectory.get("review_recommended")),
+        "degraded": str(trajectory.get("degradation_status") or "") == "degraded",
+        "confidence_penalty": round(float(trajectory.get("confidence_penalty") or 0.0), 4),
+        "verdict_agrees_with_v0": True if v0_reference is None else current_verdict == v0_verdict,
     }
 
 
@@ -476,11 +496,16 @@ def summarize_trajectories(items: Iterable[dict[str, Any]]) -> dict[str, Any]:
         "cache_hit_rate": avg("cache_hit"),
         "invokes_models_rate": avg("invokes_models"),
         "invokes_api_rate": avg("invokes_api"),
+        "review_recommended_rate": avg("review_recommended"),
+        "degraded_rate": avg("degraded"),
+        "average_confidence_penalty": avg("confidence_penalty"),
+        "verdict_agreement_rate": avg("verdict_agrees_with_v0"),
         "notes": [
             "Selected Agent Recall and Unnecessary Agent Rate are omitted without required-agent labels.",
             "Token/P50/P95 are only meaningful on real LLM backends; rule backends omit token claims.",
             "trajectory_success requires a valid verdict, gate.sufficient is True, no planner fallback, no cache hit, and no agent/tool failure, denial, or invalid arguments.",
             "evidence_coverage uses expected_evidence_requirements or deduplicated evidence IDs; skipped_by_plan placeholders are excluded.",
+            "review_recommended_rate uses calibrated unavailable+uncertainty policy; unavailable fields remain auditable even when review is not recommended.",
         ],
     }
 
@@ -513,8 +538,118 @@ def compare_variants(by_mode: dict[str, list[dict[str, Any]]]) -> dict[str, Any]
                 float(stats.get("trajectory_success_rate") or 0) - float(v0.get("trajectory_success_rate") or 0),
                 4,
             ),
+            "review_recommended_rate": round(
+                float(stats.get("review_recommended_rate") or 0) - float(v0.get("review_recommended_rate") or 0),
+                4,
+            ),
+            "degraded_rate": round(
+                float(stats.get("degraded_rate") or 0) - float(v0.get("degraded_rate") or 0),
+                4,
+            ),
+            "average_confidence_penalty": round(
+                float(stats.get("average_confidence_penalty") or 0) - float(v0.get("average_confidence_penalty") or 0),
+                4,
+            ),
+            "verdict_agreement_rate": round(
+                float(stats.get("verdict_agreement_rate") or 0) - float(v0.get("verdict_agreement_rate") or 0),
+                4,
+            ),
         }
     return {"variants": summary, "deltas_vs_v0": deltas}
+
+
+def compare_scored_trajectories(records: list[dict[str, Any]]) -> dict[str, Any]:
+    by_mode: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for item in records:
+        mode = str(item.get("orchestration_mode") or "v0_fixed")
+        by_mode[mode].append(item.get("metrics") or {})
+        grouped[mode].append(item)
+    comparison = compare_variants(by_mode)
+    for mode, items in grouped.items():
+        variant = comparison["variants"].setdefault(mode, {})
+        variant["agent_skip_rate"] = _skip_rates(items)
+        variant["agent_skip_reasons"] = _skip_reasons(items)
+    comparison["by_stratum"] = summarize_by_stratum(records)
+    return comparison
+
+
+def summarize_by_stratum(records: list[dict[str, Any]]) -> dict[str, Any]:
+    grouped: dict[str, dict[str, list[dict[str, Any]]]] = defaultdict(lambda: defaultdict(list))
+    for item in records:
+        stratum = str(item.get("stratum") or "")
+        if not stratum:
+            continue
+        mode = str(item.get("orchestration_mode") or "v0_fixed")
+        grouped[stratum][mode].append(item)
+    out: dict[str, Any] = {}
+    for stratum in STRATA:
+        modes = grouped.get(stratum) or {}
+        if not modes:
+            continue
+        variants: dict[str, Any] = {}
+        for mode, items in modes.items():
+            stats = summarize_trajectories(item.get("metrics") or {} for item in items)
+            stats["agent_skip_rate"] = _skip_rates(items)
+            stats["agent_skip_reasons"] = _skip_reasons(items)
+            variants[mode] = stats
+        v0 = variants.get("v0_fixed") or variants.get("v0") or {}
+        deltas = {}
+        for mode, stats in variants.items():
+            if mode in {"v0_fixed", "v0"}:
+                continue
+            deltas[mode] = {
+                "average_selected_agents": round(
+                    float(stats.get("average_selected_agents") or 0) - float(v0.get("average_selected_agents") or 0),
+                    4,
+                ),
+                "average_agent_calls": round(
+                    float(stats.get("average_agent_calls") or 0) - float(v0.get("average_agent_calls") or 0),
+                    4,
+                ),
+                "average_tool_calls": round(
+                    float(stats.get("average_tool_calls") or 0) - float(v0.get("average_tool_calls") or 0),
+                    4,
+                ),
+                "evidence_coverage": round(
+                    float(stats.get("evidence_coverage") or 0) - float(v0.get("evidence_coverage") or 0),
+                    4,
+                ),
+                "trajectory_success_rate": round(
+                    float(stats.get("trajectory_success_rate") or 0) - float(v0.get("trajectory_success_rate") or 0),
+                    4,
+                ),
+                "verdict_agreement_rate": round(float(stats.get("verdict_agreement_rate") or 0), 4),
+                "review_recommended_rate": round(
+                    float(stats.get("review_recommended_rate") or 0) - float(v0.get("review_recommended_rate") or 0),
+                    4,
+                ),
+            }
+        out[stratum] = {
+            "sample_count": max(len(items) for items in modes.values()),
+            "variants": variants,
+            "deltas_vs_v0": deltas,
+        }
+    return out
+
+
+def _skip_rates(items: list[dict[str, Any]]) -> dict[str, float]:
+    count = len(items) or 1
+    rates = {}
+    for name in AGENT_ORDER:
+        skipped = sum(1 for item in items if name in (item.get("skipped_agents") or []))
+        rates[name] = round(skipped / count, 4)
+    return rates
+
+
+def _skip_reasons(items: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
+    counts: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    for item in items:
+        reasons = item.get("skipped_agent_reasons") if isinstance(item.get("skipped_agent_reasons"), dict) else {}
+        for name, reason in reasons.items():
+            label = str(reason or "skipped_by_plan")
+            counts[str(name)][label] += 1
+    return {name: dict(values) for name, values in counts.items()}
 
 
 def row_stratum(row: dict[str, Any]) -> str:
@@ -866,6 +1001,7 @@ def score_evaluation_payload(
     payload: Any,
     *,
     requirements_by_sample: dict[str, list[str]] | None = None,
+    stratum_by_sample: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     if isinstance(payload, list):
         items = payload
@@ -875,41 +1011,57 @@ def score_evaluation_payload(
             raise ValueError("evaluation payload reports/trajectories must be a list")
     else:
         raise ValueError("evaluation payload must be a list or object")
-    return score_reports(items, requirements_by_sample=requirements_by_sample)
+    return score_reports(
+        items,
+        requirements_by_sample=requirements_by_sample,
+        stratum_by_sample=stratum_by_sample,
+    )
 
 
 def score_reports(
     reports: list[dict[str, Any]],
     *,
     requirements_by_sample: dict[str, list[str]] | None = None,
+    stratum_by_sample: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    by_mode: dict[str, list[dict[str, Any]]] = defaultdict(list)
     scored = []
     v0_by_sample = {}
     trajectories = [as_trajectory(item) for item in reports]
+    stratum_by_sample = stratum_by_sample or {}
     for item in trajectories:
         if item.get("orchestration_mode") == "v0_fixed":
             v0_by_sample[item.get("sample_id")] = item
     requirements_by_sample = requirements_by_sample or {}
     for item in trajectories:
         sample_id = str(item.get("sample_id") or "")
-        requirements = requirements_by_sample.get(sample_id) or list(item.get("expected_evidence_requirements") or [])
+        requirements = (
+            requirements_by_sample.get(sample_id)
+            or requirements_by_sample.get(sample_id.upper())
+            or list(item.get("expected_evidence_requirements") or [])
+        )
         metrics = score_trajectory(
             item,
-            v0_reference=v0_by_sample.get(item.get("sample_id")),
+            v0_reference=v0_by_sample.get(item.get("sample_id")) or v0_by_sample.get(sample_id.upper()),
             expected_evidence_requirements=requirements or None,
         )
         record = {**item, "metrics": metrics}
         if requirements:
             record["expected_evidence_requirements"] = requirements
+        stratum = str(
+            item.get("stratum")
+            or stratum_by_sample.get(sample_id)
+            or stratum_by_sample.get(sample_id.upper())
+            or ""
+        )
+        if stratum:
+            record["stratum"] = stratum
         scored.append(record)
-        by_mode[item.get("orchestration_mode") or "v0_fixed"].append(metrics)
     invokes_models = any(item.get("invokes_models") for item in trajectories)
     invokes_api = any(item.get("invokes_api") for item in trajectories)
     return {
         "created_at": now_iso(),
         "trajectories": scored,
-        "comparison": compare_variants(by_mode),
+        "comparison": compare_scored_trajectories(scored),
         "invokes_models": invokes_models,
         "invokes_api": invokes_api,
         "cache_hits": sum(1 for item in trajectories if item.get("cache_hit")),
@@ -1017,6 +1169,7 @@ def run_rule_trajectory_benchmark(
     judge_fn: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     data_dir: str | Path | None = None,
     requirements_by_sample: dict[str, list[str]] | None = None,
+    stratum_by_sample: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Run V0/V1/V2 on the same samples using the rule backend. No LLM/API calls."""
     workdir = Path(data_dir) if data_dir else Path(tempfile.mkdtemp(prefix="malapp-traj-"))
@@ -1063,7 +1216,11 @@ def run_rule_trajectory_benchmark(
     finally:
         _restore_environ(previous_env)
         _restore_module_paths(path_snapshot)
-    scored = score_reports(reports, requirements_by_sample=requirements_by_sample)
+    scored = score_reports(
+        reports,
+        requirements_by_sample=requirements_by_sample,
+        stratum_by_sample=stratum_by_sample,
+    )
     scored["errors"] = errors
     scored["sample_count"] = len(samples)
     scored["modes"] = list(modes)

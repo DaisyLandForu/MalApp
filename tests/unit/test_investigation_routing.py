@@ -35,6 +35,16 @@ class RecordingAgent:
         return AgentResult(self.name, "completed", 0.4, [block], 0.8, artifacts=artifacts)
 
 
+class MissingFieldAgent(RecordingAgent):
+    def run(self, context: AgentContext) -> AgentResult:
+        result = super().run(context)
+        if self.name == "threat_intel":
+            result.evidence[0].missing_fields = ["threat_intel_records", "domains"]
+        elif self.name == "impersonation":
+            result.evidence[0].missing_fields = ["official_pkg", "official_app_assets"]
+        return result
+
+
 class FlakyOnceAgent(RecordingAgent):
     def run(self, context: AgentContext) -> AgentResult:
         if self.calls == 0:
@@ -146,6 +156,35 @@ class InvestigationRoutingTest(unittest.TestCase):
         self.assertEqual(self.agents[1].calls, 1)
         self.assertTrue(any(item["phase"] == "replan_started" for item in report["investigation"]["lifecycle"]))
         self.assertTrue(any(item["phase"] == "replan_finished" for item in report["investigation"]["lifecycle"]))
+
+    def test_unavailable_fields_do_not_trigger_empty_replan(self) -> None:
+        agents = [MissingFieldAgent(name) for name in AGENT_ORDER]
+        with patch.dict(
+            "os.environ",
+            {"MALAPP_PLANNER_ENABLED": "1", "MALAPP_PLANNER_MODE": "rule", "MALAPP_TOOL_RUNTIME_ENABLED": "0"},
+            clear=False,
+        ):
+            _blocks, report, results = run_investigation(
+                {
+                    "sample_id": "unavailable",
+                    "package_name": "com.example.app",
+                    "control_url": "https://c2.example.test",
+                    "fake_app": True,
+                },
+                [],
+                run_id="run-unavailable",
+                agents=agents,
+            )
+        self.assertEqual(agents[0].calls, 1)
+        self.assertEqual(agents[1].calls, 1)
+        self.assertEqual(agents[2].calls, 1)
+        self.assertEqual(report["investigation"]["recovery_used"], 0)
+        self.assertTrue(report["investigation"]["evidence_gate"]["sufficient"])
+        self.assertTrue(report["investigation"]["evidence_gate"]["unavailable_fields"])
+        self.assertFalse(any(item["phase"] == "replan_started" for item in report["investigation"]["lifecycle"]))
+        self.assertTrue(report["investigation"]["degradation"]["review_recommended"])
+        threat = next(item for item in results if item.agent_name == "threat_intel")
+        self.assertEqual(threat.status, "completed")
 
     def test_skipped_placeholder_is_not_degraded_result(self) -> None:
         result = skipped_by_plan_result("business_label", "insufficient_business_signal")

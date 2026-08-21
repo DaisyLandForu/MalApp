@@ -55,6 +55,40 @@ def evaluate_degradation(results: list[AgentResult]) -> dict[str, Any]:
     }
 
 
+def merge_unavailable_evidence(policy: dict[str, Any], gate: dict[str, Any] | None) -> dict[str, Any]:
+    """Record fields that cannot be obtained by another Agent/Tool without failing the run."""
+    merged = dict(policy or {})
+    gate = gate if isinstance(gate, dict) else {}
+    unavailable = [str(item) for item in (gate.get("unavailable_fields") or []) if str(item).strip()]
+    if not unavailable:
+        merged.setdefault("unavailable_fields", [])
+        merged.setdefault("review_recommended", False)
+        return merged
+    extra = [
+        {
+            "code": "unavailable_evidence",
+            "agent": "",
+            "failure_type": "unavailable",
+            "severity": "info",
+            "confidence_penalty": 0.04,
+            "action": "continue_with_penalty",
+            "message": field,
+        }
+        for field in unavailable
+    ]
+    penalty = round(
+        min(0.5, float(merged.get("confidence_penalty") or 0.0) + min(0.16, 0.04 * len(unavailable))),
+        4,
+    )
+    merged["confidence_penalty"] = penalty
+    merged["reasons"] = list(merged.get("reasons") or []) + extra
+    merged["unavailable_fields"] = unavailable
+    merged["review_recommended"] = True
+    if merged.get("status") != "degraded":
+        merged["status"] = "degraded"
+    return merged
+
+
 def apply_degradation_policy(decision: dict[str, Any], policy: dict[str, Any]) -> dict[str, Any]:
     original_verdict = str(decision.get("verdict") or "")
     fusion = decision.get("fusion") if isinstance(decision.get("fusion"), dict) else {}

@@ -1,5 +1,5 @@
 {
-  "created_at": "2026-08-21T02:49:28.137051+00:00",
+  "created_at": "2026-08-21T03:35:30.013885+00:00",
   "manifest_sha256": "9192bf18470eb17a43159466b8c5a2559258dd510b6a28fddb5a7971e19cd77a",
   "manifest_size": 150,
   "source": "/data/hanchengcheng/hcc_1/du/MalApp/training_artifacts/xgb_selected_20260616/test_set_for_app.csv",
@@ -50,7 +50,7 @@
         "notes": [
           "Selected Agent Recall and Unnecessary Agent Rate are omitted without required-agent labels.",
           "Token/P50/P95 are only meaningful on real LLM backends; rule backends omit token claims.",
-          "trajectory_success requires a valid verdict, final evidence gate, no planner fallback, no cache hit, and no agent/tool failure.",
+          "trajectory_success requires a valid verdict, gate.sufficient is True, no planner fallback, no cache hit, and no agent/tool failure, denial, or invalid arguments.",
           "evidence_coverage uses expected_evidence_requirements or deduplicated evidence IDs; skipped_by_plan placeholders are excluded."
         ]
       },
@@ -63,8 +63,8 @@
         "average_agent_attempts": 3.8133,
         "average_agent_retries": 0.0,
         "average_replan_agent_calls": 0.0,
-        "replan_rate": 0.9933,
-        "trajectory_success_rate": 0.0067,
+        "replan_rate": 0.0,
+        "trajectory_success_rate": 1.0,
         "average_tool_calls": 0.0,
         "tool_call_success_rate": 1.0,
         "tool_denial_rate": 0.0,
@@ -79,7 +79,7 @@
         "notes": [
           "Selected Agent Recall and Unnecessary Agent Rate are omitted without required-agent labels.",
           "Token/P50/P95 are only meaningful on real LLM backends; rule backends omit token claims.",
-          "trajectory_success requires a valid verdict, final evidence gate, no planner fallback, no cache hit, and no agent/tool failure.",
+          "trajectory_success requires a valid verdict, gate.sufficient is True, no planner fallback, no cache hit, and no agent/tool failure, denial, or invalid arguments.",
           "evidence_coverage uses expected_evidence_requirements or deduplicated evidence IDs; skipped_by_plan placeholders are excluded."
         ]
       },
@@ -92,8 +92,8 @@
         "average_agent_attempts": 3.8133,
         "average_agent_retries": 0.0,
         "average_replan_agent_calls": 0.0,
-        "replan_rate": 0.9933,
-        "trajectory_success_rate": 0.0067,
+        "replan_rate": 0.0,
+        "trajectory_success_rate": 1.0,
         "average_tool_calls": 11.44,
         "tool_call_success_rate": 1.0,
         "tool_denial_rate": 0.0,
@@ -108,7 +108,7 @@
         "notes": [
           "Selected Agent Recall and Unnecessary Agent Rate are omitted without required-agent labels.",
           "Token/P50/P95 are only meaningful on real LLM backends; rule backends omit token claims.",
-          "trajectory_success requires a valid verdict, final evidence gate, no planner fallback, no cache hit, and no agent/tool failure.",
+          "trajectory_success requires a valid verdict, gate.sufficient is True, no planner fallback, no cache hit, and no agent/tool failure, denial, or invalid arguments.",
           "evidence_coverage uses expected_evidence_requirements or deduplicated evidence IDs; skipped_by_plan placeholders are excluded."
         ]
       }
@@ -119,14 +119,14 @@
         "evidence_coverage": 0.0,
         "average_agent_calls": -0.1867,
         "average_tool_calls": 0.0,
-        "trajectory_success_rate": -0.9933
+        "trajectory_success_rate": 0.0
       },
       "v2_planner_tools": {
         "average_selected_agents": -0.1867,
         "evidence_coverage": 0.0,
         "average_agent_calls": -0.1867,
         "average_tool_calls": 11.44,
-        "trajectory_success_rate": -0.9933
+        "trajectory_success_rate": 0.0
       }
     }
   },

@@ -1,4 +1,9 @@
-"""Deterministic evidence sufficiency gate. No LLM judge in V1."""
+"""Deterministic evidence sufficiency gate. No LLM judge in V1.
+
+Sufficiency means existing evidence can support a judgement. Missing fields are
+either remediable (another Agent/Tool could still obtain them) or unavailable.
+Only remediable gaps fail the gate and may trigger one Re-plan.
+"""
 
 from __future__ import annotations
 
@@ -12,6 +17,7 @@ from malapp.orchestration.planner import (
     has_business_signal,
     has_impersonation_signal,
     has_network_signal,
+    tool_runtime_enabled,
 )
 
 IOC_MISSING_MARKERS = (
@@ -31,13 +37,21 @@ IMPERSONATION_MISSING_MARKERS = (
     "icon_hash",
     "icon_text",
 )
+IOC_REMEDIATION_TOOLS = ("ioc_lookup", "network_indicator")
+IMPERSONATION_REMEDIATION_TOOLS = (
+    "official_asset_match",
+    "package_similarity",
+    "certificate_comparison",
+)
 
 
 @dataclass
 class EvidenceGateResult:
     sufficient: bool = True
     missing_fields: list[str] = field(default_factory=list)
+    unavailable_fields: list[str] = field(default_factory=list)
     reason_codes: list[str] = field(default_factory=list)
+    unavailable_reason_codes: list[str] = field(default_factory=list)
     suggested_agents: list[str] = field(default_factory=list)
     suggested_tools: list[str] = field(default_factory=list)
 
@@ -45,7 +59,9 @@ class EvidenceGateResult:
         return {
             "sufficient": self.sufficient,
             "missing_fields": list(self.missing_fields),
+            "unavailable_fields": list(self.unavailable_fields),
             "reason_codes": list(self.reason_codes),
+            "unavailable_reason_codes": list(self.unavailable_reason_codes),
             "suggested_agents": list(self.suggested_agents),
             "suggested_tools": list(self.suggested_tools),
         }
@@ -76,6 +92,15 @@ def _ops_disabled(plan: InvestigationPlan, results: dict[str, AgentResult], name
     return bool(agent_plan and agent_plan.reason_code == "disabled_agent_override")
 
 
+def _matching_fields(fields: list[str], markers: tuple[str, ...]) -> list[str]:
+    return [item for item in fields if any(marker in item for marker in markers)]
+
+
+def _unused_tools(agent: str, executed_tools: dict[str, list[str]], candidates: tuple[str, ...]) -> list[str]:
+    ran = {str(name) for name in (executed_tools.get(agent) or [])}
+    return [name for name in candidates if name not in ran]
+
+
 def evaluate_evidence_gate(
     plan: InvestigationPlan,
     results: list[AgentResult],
@@ -88,72 +113,81 @@ def evaluate_evidence_gate(
     sample = sample or {}
     iocs = iocs or []
     executed_tools = executed_tools or {}
-    missing: list[str] = []
+    tools_live = tool_runtime_enabled()
+    remediable: list[str] = []
+    unavailable: list[str] = []
     reasons: list[str] = []
+    unavailable_reasons: list[str] = []
     suggested_agents: list[str] = []
     suggested_tools: list[str] = []
     focus = set(plan.risk_focus)
 
     static = by_agent.get("static_analysis")
     if not _ran(static) and not _ops_disabled(plan, by_agent, "static_analysis"):
-        missing.append("static_analysis")
+        remediable.append("static_analysis")
         reasons.append("static_evidence_missing")
         suggested_agents.append("static_analysis")
 
     threat_needed = "network_ioc" in focus or has_network_signal(sample, iocs)
     if threat_needed and not _ops_disabled(plan, by_agent, "threat_intel"):
         threat = by_agent.get("threat_intel")
-        threat_missing = _missing_fields(threat)
-        ioc_missing = [item for item in threat_missing if any(marker in item for marker in IOC_MISSING_MARKERS)]
+        ioc_missing = _matching_fields(_missing_fields(threat), IOC_MISSING_MARKERS)
         if not _ran(threat):
-            missing.append("threat_intel")
+            remediable.append("threat_intel")
             reasons.append("network_ioc_agent_skipped")
             suggested_agents.append("threat_intel")
         elif ioc_missing:
-            missing.extend(ioc_missing)
-            reasons.append("network_ioc_fields_missing")
-            for tool in ("ioc_lookup", "network_indicator"):
-                if tool not in executed_tools.get("threat_intel", []):
-                    suggested_tools.append(tool)
-                    suggested_agents.append("threat_intel")
+            pending = _unused_tools("threat_intel", executed_tools, IOC_REMEDIATION_TOOLS) if tools_live else []
+            if pending:
+                remediable.extend(ioc_missing)
+                reasons.append("network_ioc_tools_pending")
+                suggested_tools.extend(pending)
+                suggested_agents.append("threat_intel")
+            else:
+                unavailable.extend(ioc_missing)
+                unavailable_reasons.append("network_ioc_fields_unavailable")
 
     impersonation_needed = "impersonation" in focus or has_impersonation_signal(sample)
     if impersonation_needed and not _ops_disabled(plan, by_agent, "impersonation"):
         impersonation = by_agent.get("impersonation")
-        impersonation_missing = _missing_fields(impersonation)
-        asset_missing = [
-            item
-            for item in impersonation_missing
-            if any(marker in item for marker in IMPERSONATION_MISSING_MARKERS)
-        ]
+        asset_missing = _matching_fields(_missing_fields(impersonation), IMPERSONATION_MISSING_MARKERS)
         if not _ran(impersonation):
-            missing.append("impersonation")
+            remediable.append("impersonation")
             reasons.append("impersonation_agent_skipped")
             suggested_agents.append("impersonation")
         elif asset_missing:
-            missing.extend(asset_missing)
-            reasons.append("impersonation_fields_missing")
-            for tool in ("official_asset_match", "package_similarity", "certificate_comparison"):
-                if tool not in executed_tools.get("impersonation", []):
-                    suggested_tools.append(tool)
-                    suggested_agents.append("impersonation")
+            pending = (
+                _unused_tools("impersonation", executed_tools, IMPERSONATION_REMEDIATION_TOOLS) if tools_live else []
+            )
+            if pending:
+                remediable.extend(asset_missing)
+                reasons.append("impersonation_tools_pending")
+                suggested_tools.extend(pending)
+                suggested_agents.append("impersonation")
+            else:
+                unavailable.extend(asset_missing)
+                unavailable_reasons.append("impersonation_fields_unavailable")
 
     business_needed = "business_label" in focus or has_business_signal(sample)
     if business_needed and not _ops_disabled(plan, by_agent, "business_label"):
         business = by_agent.get("business_label")
         if not _ran(business):
-            missing.append("business_label")
+            remediable.append("business_label")
             reasons.append("business_agent_skipped")
             suggested_agents.append("business_label")
 
     unique_agents = [name for name in AGENT_ORDER if name in dict.fromkeys(suggested_agents)]
     unique_tools = list(dict.fromkeys(suggested_tools))
-    unique_missing = list(dict.fromkeys(missing))
+    unique_remediable = list(dict.fromkeys(remediable))
+    unique_unavailable = list(dict.fromkeys(unavailable))
     unique_reasons = list(dict.fromkeys(reasons))
+    unique_unavailable_reasons = list(dict.fromkeys(unavailable_reasons))
     return EvidenceGateResult(
         sufficient=not unique_reasons,
-        missing_fields=unique_missing,
+        missing_fields=unique_remediable,
+        unavailable_fields=unique_unavailable,
         reason_codes=unique_reasons,
+        unavailable_reason_codes=unique_unavailable_reasons,
         suggested_agents=unique_agents,
         suggested_tools=unique_tools,
     )

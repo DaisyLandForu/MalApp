@@ -6,7 +6,7 @@ from typing import Any
 
 from malapp.agents.base import Agent, AgentResult, EvidenceBlock
 from malapp.agents.evidence_contract import AGENT_ORDER
-from malapp.orchestration.degradation import evaluate_degradation
+from malapp.orchestration.degradation import evaluate_degradation, merge_unavailable_evidence
 from malapp.orchestration.evidence_gate import EvidenceGateResult, evaluate_evidence_gate
 from malapp.orchestration.planner import (
     InvestigationPlan,
@@ -80,7 +80,7 @@ def run_investigation(
             run_id,
         )
     )
-    if not gate.sufficient and recovery_used < 1:
+    if not gate.sufficient and recovery_used < 1 and (gate.suggested_agents or gate.suggested_tools):
         recovery_used += 1
         results, runtime_report, plan = _recover(
             plan,
@@ -445,7 +445,7 @@ def _merge_runtime_report(
         "lifecycle": events,
         "evidence_gate": gate.to_dict(),
         "recovery_used": recovery_used,
-        "degradation": evaluate_degradation(results),
+        "degradation": merge_unavailable_evidence(evaluate_degradation(results), gate.to_dict()),
         "tool_observations": [
             item
             for result in results

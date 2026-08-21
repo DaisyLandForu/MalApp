@@ -28,7 +28,7 @@ from malapp.config.paths import DEFAULTS_DIR, PROJECT_ROOT, resolve_data_dir
 from malapp.inference.local_qwen import local_qwen_enabled
 from malapp.orchestration.debate import run_debate
 from malapp.orchestration.decision import collaborative_decision
-from malapp.orchestration.degradation import apply_degradation_policy, evaluate_degradation
+from malapp.orchestration.degradation import apply_degradation_policy, evaluate_degradation, merge_unavailable_evidence
 from malapp.orchestration.pipeline import PipelineStateMachine
 from malapp.orchestration.planner import orchestration_mode, tool_runtime_enabled
 from malapp.rag import rag_context_for_sample
@@ -1566,7 +1566,10 @@ def execute_judgement(raw_sample: dict[str, Any], *, entrypoint: str = "internal
         normalized.update(artifacts)
         evidence_blocks, agent_output_validation = validate_and_repair_evidence_blocks(evidence_blocks)
         evidence_blocks = add_structured_evidence(evidence_blocks, normalized)
-        degradation_policy = evaluate_degradation(agent_results)
+        degradation_policy = merge_unavailable_evidence(
+            evaluate_degradation(agent_results),
+            (agent_runtime.get("investigation") or {}).get("evidence_gate"),
+        )
         agent_metadata = {
             "runtime_status": agent_runtime["status"],
             "agent_statuses": {

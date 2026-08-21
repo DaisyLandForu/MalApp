@@ -240,15 +240,30 @@ def cmd_trajectory_manifest(args: argparse.Namespace) -> None:
     from malapp.evaluation.trajectory import build_benchmark_manifest
     from malapp.evaluation.trajectory import write_json as write_traj
 
-    rows = load_validation_rows(Path(args.validation_csv))
+    source = Path(args.validation_csv)
+    rows = load_validation_rows(source)
     manifest = build_benchmark_manifest(
         rows,
         size=args.size,
         runtime_snapshot_id=args.runtime_snapshot_id,
+        source=source,
+        allow_stratum_waiver=bool(getattr(args, "allow_stratum_waiver", False)),
+        fill_missing_strata=not bool(getattr(args, "no_synthetic_strata", False)),
     )
     output = Path(args.output) if args.output else Path("outputs") / "evaluation" / "trajectory_benchmark.json"
     write_traj(output, manifest)
-    print_json({"output": str(output), "size": manifest["size"], "strata": manifest["strata"]})
+    print_json(
+        {
+            "output": str(output),
+            "size": manifest["size"],
+            "strata": manifest["strata"],
+            "source": manifest["source"],
+            "source_sha256": manifest["source_sha256"],
+            "runtime_snapshot_id": manifest["runtime_snapshot_id"],
+            "manifest_sha256": manifest["manifest_sha256"],
+            "stratum_waivers": manifest.get("stratum_waivers") or [],
+        }
+    )
 
 
 def cmd_trajectory_score(args: argparse.Namespace) -> None:
@@ -271,48 +286,85 @@ def cmd_trajectory_score(args: argparse.Namespace) -> None:
 def cmd_trajectory_run(args: argparse.Namespace) -> None:
     """Run V0/V1/V2 on a frozen trajectory subset using the rule backend."""
     from malapp.evaluation.trajectory import (
+        DEFAULT_PUBLISH_DIR,
         ORCHESTRATION_MODES,
         build_benchmark_manifest,
+        load_benchmark_manifest,
         run_rule_trajectory_benchmark,
+        slim_trajectory_summary,
     )
     from malapp.evaluation.trajectory import write_json as write_traj
 
-    rows = load_validation_rows(Path(args.validation_csv))
-    smoke = int(args.limit or 0) > 0
-    manifest = build_benchmark_manifest(
-        rows,
-        size=args.limit if smoke else args.size,
-        runtime_snapshot_id=args.runtime_snapshot_id,
-        min_size=1 if smoke else 100,
-        max_size=args.limit if smoke else 200,
-    )
-    by_id = {row["_row_id"]: row for row in rows if row.get("_row_id")}
-    samples = [blind_model_input(by_id[item["sample_id"]]) for item in manifest["samples"] if item["sample_id"] in by_id]
+    if args.manifest:
+        manifest = load_benchmark_manifest(Path(args.manifest))
+        if int(args.limit or 0) > 0:
+            manifest = dict(manifest)
+            manifest["samples"] = list(manifest.get("samples") or [])[: int(args.limit)]
+            manifest["size"] = len(manifest["samples"])
+    else:
+        source = Path(args.validation_csv)
+        rows = load_validation_rows(source)
+        smoke = int(args.limit or 0) > 0
+        manifest = build_benchmark_manifest(
+            rows,
+            size=args.limit if smoke else args.size,
+            runtime_snapshot_id=args.runtime_snapshot_id,
+            min_size=1 if smoke else 100,
+            max_size=args.limit if smoke else 200,
+            source=source,
+            allow_stratum_waiver=bool(args.allow_stratum_waiver),
+            fill_missing_strata=not bool(args.no_synthetic_strata),
+        )
+    samples = [dict(item["blinded_input"]) for item in manifest["samples"]]
+    requirements = {
+        str(item["sample_id"]): list(item.get("expected_evidence_requirements") or [])
+        for item in manifest["samples"]
+    }
     output_dir = Path(args.output) if args.output else Path("outputs") / "evaluation"
     output_dir.mkdir(parents=True, exist_ok=True)
     write_traj(output_dir / "trajectory_benchmark.json", manifest)
-    result = run_rule_trajectory_benchmark(samples, modes=ORCHESTRATION_MODES)
+    isolated_dir = output_dir / "isolated_data"
+    result = run_rule_trajectory_benchmark(
+        samples,
+        modes=ORCHESTRATION_MODES,
+        requirements_by_sample=requirements,
+        data_dir=isolated_dir,
+    )
     payload = {
         "manifest_sha256": manifest["manifest_sha256"],
         "manifest_size": manifest["size"],
         "sample_count": result["sample_count"],
         "backend": result["backend"],
-        "invokes_models": False,
+        "debate_mode": result.get("debate_mode"),
+        "invokes_models": result["invokes_models"],
+        "invokes_api": result.get("invokes_api"),
+        "cache_hits": result.get("cache_hits"),
+        "isolated_data_dir": result.get("isolated_data_dir"),
         "errors": result.get("errors") or [],
         "comparison": result["comparison"],
         "trajectories": result["trajectories"],
     }
-    write_traj(output_dir / "trajectory_score.json", payload)
-    print_json(
-        {
-            "output": str(output_dir / "trajectory_score.json"),
-            "manifest": str(output_dir / "trajectory_benchmark.json"),
-            "sample_count": payload["sample_count"],
-            "invokes_models": False,
-            "errors": payload["errors"],
-            "comparison": payload["comparison"],
-        }
-    )
+    summary = slim_trajectory_summary(payload, manifest)
+    write_traj(output_dir / "trajectory_summary.json", summary)
+    if not args.summary_only:
+        write_traj(output_dir / "trajectory_score.json", payload)
+    if args.publish_defaults:
+        write_traj(DEFAULT_PUBLISH_DIR / "trajectory_benchmark.json", manifest)
+        write_traj(DEFAULT_PUBLISH_DIR / "trajectory_summary.json", summary)
+    printed = {
+        "output": str(output_dir / ("trajectory_summary.json" if args.summary_only else "trajectory_score.json")),
+        "summary": str(output_dir / "trajectory_summary.json"),
+        "manifest": str(output_dir / "trajectory_benchmark.json"),
+        "sample_count": payload["sample_count"],
+        "invokes_models": payload["invokes_models"],
+        "invokes_api": payload["invokes_api"],
+        "cache_hits": payload["cache_hits"],
+        "errors": payload["errors"],
+        "strata": manifest.get("strata"),
+        "stratum_waivers": manifest.get("stratum_waivers") or [],
+        "comparison": payload["comparison"],
+    }
+    print_json(printed)
     if payload["errors"]:
         raise RuntimeError(f"trajectory run finished with {len(payload['errors'])} errors")
 
@@ -862,6 +914,16 @@ def parser() -> argparse.ArgumentParser:
     traj_manifest.add_argument("--size", type=int, default=150)
     traj_manifest.add_argument("--runtime-snapshot-id", default="")
     traj_manifest.add_argument("--output", default="")
+    traj_manifest.add_argument(
+        "--allow-stratum-waiver",
+        action="store_true",
+        help="record a waiver instead of failing when a required stratum is empty",
+    )
+    traj_manifest.add_argument(
+        "--no-synthetic-strata",
+        action="store_true",
+        help="do not insert fixtures for missing required strata",
+    )
     traj_manifest.set_defaults(func=cmd_trajectory_manifest)
 
     traj_score = sub.add_parser(
@@ -886,9 +948,34 @@ def parser() -> argparse.ArgumentParser:
     )
     traj_run.add_argument("--runtime-snapshot-id", default="")
     traj_run.add_argument(
+        "--manifest",
+        default="",
+        help="replay a previously frozen trajectory_benchmark.json instead of rebuilding",
+    )
+    traj_run.add_argument(
+        "--allow-stratum-waiver",
+        action="store_true",
+        help="record a waiver instead of failing when a required stratum is empty",
+    )
+    traj_run.add_argument(
+        "--no-synthetic-strata",
+        action="store_true",
+        help="do not insert fixtures for missing required strata",
+    )
+    traj_run.add_argument(
+        "--summary-only",
+        action="store_true",
+        help="write manifest + slim summary without the full 8MB trajectory dump",
+    )
+    traj_run.add_argument(
+        "--publish-defaults",
+        action="store_true",
+        help="copy frozen manifest and slim summary into malapp/config/defaults/eval/",
+    )
+    traj_run.add_argument(
         "--output",
         default="",
-        help="directory for trajectory_benchmark.json and trajectory_score.json",
+        help="directory for trajectory_benchmark.json, trajectory_summary.json and optional traces",
     )
     traj_run.set_defaults(func=cmd_trajectory_run)
 

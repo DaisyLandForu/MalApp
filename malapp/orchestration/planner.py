@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import time
 import uuid
 from dataclasses import asdict, dataclass, field
 from typing import Any
@@ -504,6 +505,7 @@ def plan_event(
         "status": status,
         "message": message,
         "orchestration_mode": orchestration_mode(),
+        "ts": time.time(),
     }
 
 

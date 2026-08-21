@@ -1,0 +1,135 @@
+{
+  "created_at": "2026-08-21T02:49:28.137051+00:00",
+  "manifest_sha256": "9192bf18470eb17a43159466b8c5a2559258dd510b6a28fddb5a7971e19cd77a",
+  "manifest_size": 150,
+  "source": "/data/hanchengcheng/hcc_1/du/MalApp/training_artifacts/xgb_selected_20260616/test_set_for_app.csv",
+  "source_sha256": "cb5c178dcbfad16d9496d5e874aa1cfd63ea4735405d92d8502c3ebc08473291",
+  "runtime_snapshot_id": "runtime-afe9c73bda00c957",
+  "debate_mode": "no_debate",
+  "eval_variant": "trajectory",
+  "sample_count": 150,
+  "backend": "rule",
+  "invokes_models": false,
+  "invokes_api": false,
+  "cache_hits": 0,
+  "errors": [],
+  "strata": {
+    "malicious": 21,
+    "benign": 21,
+    "ab_conflict": 21,
+    "impersonation": 21,
+    "ioc": 44,
+    "static_risk": 21,
+    "missing_fields": 1
+  },
+  "stratum_waivers": [],
+  "comparison": {
+    "variants": {
+      "v0_fixed": {
+        "count": 150,
+        "plan_valid_rate": 1.0,
+        "planner_fallback_rate": 0.0,
+        "average_selected_agents": 4.0,
+        "average_agent_calls": 4.0,
+        "average_agent_attempts": 4.0,
+        "average_agent_retries": 0.0,
+        "average_replan_agent_calls": 0.0,
+        "replan_rate": 0.0,
+        "trajectory_success_rate": 1.0,
+        "average_tool_calls": 0.0,
+        "tool_call_success_rate": 1.0,
+        "tool_denial_rate": 0.0,
+        "tool_timeout_rate": 0.0,
+        "tool_argument_valid_rate": 1.0,
+        "evidence_coverage": 0.93,
+        "unsupported_evidence_rate": 0.0,
+        "missing_critical_evidence_rate": 0.07,
+        "cache_hit_rate": 0.0,
+        "invokes_models_rate": 0.0,
+        "invokes_api_rate": 0.0,
+        "notes": [
+          "Selected Agent Recall and Unnecessary Agent Rate are omitted without required-agent labels.",
+          "Token/P50/P95 are only meaningful on real LLM backends; rule backends omit token claims.",
+          "trajectory_success requires a valid verdict, final evidence gate, no planner fallback, no cache hit, and no agent/tool failure.",
+          "evidence_coverage uses expected_evidence_requirements or deduplicated evidence IDs; skipped_by_plan placeholders are excluded."
+        ]
+      },
+      "v1_planner": {
+        "count": 150,
+        "plan_valid_rate": 1.0,
+        "planner_fallback_rate": 0.0,
+        "average_selected_agents": 3.8133,
+        "average_agent_calls": 3.8133,
+        "average_agent_attempts": 3.8133,
+        "average_agent_retries": 0.0,
+        "average_replan_agent_calls": 0.0,
+        "replan_rate": 0.9933,
+        "trajectory_success_rate": 0.0067,
+        "average_tool_calls": 0.0,
+        "tool_call_success_rate": 1.0,
+        "tool_denial_rate": 0.0,
+        "tool_timeout_rate": 0.0,
+        "tool_argument_valid_rate": 1.0,
+        "evidence_coverage": 0.93,
+        "unsupported_evidence_rate": 0.0,
+        "missing_critical_evidence_rate": 0.07,
+        "cache_hit_rate": 0.0,
+        "invokes_models_rate": 0.0,
+        "invokes_api_rate": 0.0,
+        "notes": [
+          "Selected Agent Recall and Unnecessary Agent Rate are omitted without required-agent labels.",
+          "Token/P50/P95 are only meaningful on real LLM backends; rule backends omit token claims.",
+          "trajectory_success requires a valid verdict, final evidence gate, no planner fallback, no cache hit, and no agent/tool failure.",
+          "evidence_coverage uses expected_evidence_requirements or deduplicated evidence IDs; skipped_by_plan placeholders are excluded."
+        ]
+      },
+      "v2_planner_tools": {
+        "count": 150,
+        "plan_valid_rate": 1.0,
+        "planner_fallback_rate": 0.0,
+        "average_selected_agents": 3.8133,
+        "average_agent_calls": 3.8133,
+        "average_agent_attempts": 3.8133,
+        "average_agent_retries": 0.0,
+        "average_replan_agent_calls": 0.0,
+        "replan_rate": 0.9933,
+        "trajectory_success_rate": 0.0067,
+        "average_tool_calls": 11.44,
+        "tool_call_success_rate": 1.0,
+        "tool_denial_rate": 0.0,
+        "tool_timeout_rate": 0.0,
+        "tool_argument_valid_rate": 1.0,
+        "evidence_coverage": 0.93,
+        "unsupported_evidence_rate": 0.0,
+        "missing_critical_evidence_rate": 0.07,
+        "cache_hit_rate": 0.0,
+        "invokes_models_rate": 0.0,
+        "invokes_api_rate": 0.0,
+        "notes": [
+          "Selected Agent Recall and Unnecessary Agent Rate are omitted without required-agent labels.",
+          "Token/P50/P95 are only meaningful on real LLM backends; rule backends omit token claims.",
+          "trajectory_success requires a valid verdict, final evidence gate, no planner fallback, no cache hit, and no agent/tool failure.",
+          "evidence_coverage uses expected_evidence_requirements or deduplicated evidence IDs; skipped_by_plan placeholders are excluded."
+        ]
+      }
+    },
+    "deltas_vs_v0": {
+      "v1_planner": {
+        "average_selected_agents": -0.1867,
+        "evidence_coverage": 0.0,
+        "average_agent_calls": -0.1867,
+        "average_tool_calls": 0.0,
+        "trajectory_success_rate": -0.9933
+      },
+      "v2_planner_tools": {
+        "average_selected_agents": -0.1867,
+        "evidence_coverage": 0.0,
+        "average_agent_calls": -0.1867,
+        "average_tool_calls": 11.44,
+        "trajectory_success_rate": -0.9933
+      }
+    }
+  },
+  "isolated": true,
+  "cache_proven_clean": true
+}

@@ -56,6 +56,25 @@ class ToolSpec:
     description: str = ""
 
 
+def validate_tool_arguments(tool_name: str, agent: str, arguments: Any) -> tuple[bool, list[str]]:
+    """Validate the ToolCall argument object. Denial/timeout is a separate status."""
+    errors: list[str] = []
+    if not str(tool_name or "").strip():
+        errors.append("missing_tool_name")
+    if not str(agent or "").strip():
+        errors.append("missing_agent")
+    if not isinstance(arguments, dict):
+        errors.append("arguments_not_object")
+        return False, errors
+    if not isinstance(arguments.get("sample"), dict):
+        errors.append("sample_not_object")
+    if "iocs" not in arguments:
+        errors.append("missing_iocs")
+    elif not isinstance(arguments.get("iocs"), list):
+        errors.append("iocs_not_list")
+    return not errors, errors
+
+
 @dataclass
 class ToolCall:
     tool_name: str
@@ -85,6 +104,8 @@ class ToolObservation:
     plan_id: str = ""
     run_id: str = ""
     phase: str = ""
+    arguments_valid: bool = True
+    argument_errors: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)

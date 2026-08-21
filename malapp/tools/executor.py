@@ -12,6 +12,7 @@ from malapp.tools.base import (
     ToolObservation,
     clone_facts,
     digest_value,
+    validate_tool_arguments,
 )
 from malapp.tools.registry import ToolRegistry
 
@@ -38,6 +39,7 @@ class ToolExecutor:
         input_payload = {"sample": sample, "iocs": list(iocs or [])}
         for name in names:
             call = ToolCall(tool_name=name, agent=agent, arguments=dict(input_payload))
+            arguments_valid, argument_errors = validate_tool_arguments(name, agent, call.arguments)
             input_digest = digest_value({"tool": name, "agent": agent, "arguments": call.arguments})
             started = time.monotonic()
             result.events.append(
@@ -62,6 +64,8 @@ class ToolExecutor:
                     error="tool_call_denied",
                     plan_id=plan_id,
                     run_id=run_id,
+                    arguments_valid=arguments_valid,
+                    argument_errors=argument_errors,
                 )
                 result.observations.append(observation)
                 result.denied.append(name)
@@ -81,6 +85,8 @@ class ToolExecutor:
                     output_digest=digest_value(facts),
                     plan_id=plan_id,
                     run_id=run_id,
+                    arguments_valid=arguments_valid,
+                    argument_errors=argument_errors,
                 )
             except TimeoutError as exc:
                 observation = _observation(
@@ -93,6 +99,8 @@ class ToolExecutor:
                     error=str(exc),
                     plan_id=plan_id,
                     run_id=run_id,
+                    arguments_valid=arguments_valid,
+                    argument_errors=argument_errors,
                 )
             except Exception as exc:
                 observation = _observation(
@@ -105,6 +113,8 @@ class ToolExecutor:
                     error=f"{type(exc).__name__}: {exc}",
                     plan_id=plan_id,
                     run_id=run_id,
+                    arguments_valid=arguments_valid,
+                    argument_errors=argument_errors,
                 )
             result.observations.append(observation)
             result.events.append(_event_from_observation(observation))
@@ -126,6 +136,8 @@ def _observation(
     error: str = "",
     plan_id: str = "",
     run_id: str = "",
+    arguments_valid: bool = True,
+    argument_errors: list[str] | None = None,
 ) -> ToolObservation:
     copied = clone_facts(facts or {})
     return ToolObservation(
@@ -141,6 +153,8 @@ def _observation(
         plan_id=plan_id,
         run_id=run_id,
         phase=TOOL_PHASE_BY_STATUS.get(status, status),
+        arguments_valid=bool(arguments_valid),
+        argument_errors=list(argument_errors or []),
     )
 
 

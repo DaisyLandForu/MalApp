@@ -486,12 +486,19 @@ python -m scripts.evaluation.run_evaluation gate `
 - `v1_planner`：Rule Planner 裁剪 Agent
 - `v2_planner_tools`：Planner + 确定性 Tool Runtime
 
+`manifest_sha256` 覆盖 blinded 输入摘要、源 CSV SHA256、runtime snapshot 和模式配置。可用 `--manifest` 重放，不必依赖 gitignore 中的原始 CSV。
+
+必需分层为 malicious / benign / ab_conflict / impersonation / ioc / static_risk / missing_fields。缺层时插入 fixture，或用 `--allow-stratum-waiver` 写出明确 waiver。
+
 ```powershell
 # 冒烟：4 条，不触发 100 条下限
 python scripts/evaluation/run_evaluation.py trajectory-run --limit 4 --output outputs/evaluation
 
-# 冻结并跑满 150 条规则轨迹（仍不调用 LLM）
-python scripts/evaluation/run_evaluation.py trajectory-run --size 150 --output outputs/evaluation
+# 冻结并跑满 150 条规则轨迹（仍不调用 LLM），同时写出可提交的 manifest + summary
+python scripts/evaluation/run_evaluation.py trajectory-run --size 150 --output outputs/evaluation --publish-defaults
+
+# 从已冻结 manifest 重放
+python scripts/evaluation/run_evaluation.py trajectory-run --manifest malapp/config/defaults/eval/trajectory_benchmark.json --output outputs/evaluation
 
 # 只对已有报告打分
 python scripts/evaluation/run_evaluation.py trajectory-score --reports outputs/evaluation/trajectory_score.json
@@ -499,8 +506,17 @@ python scripts/evaluation/run_evaluation.py trajectory-score --reports outputs/e
 
 输出：
 
-- `trajectory_benchmark.json`：冻结清单与 `manifest_sha256`
-- `trajectory_score.json`：V0/V1/V2 对比，含 selected agents、tool calls、evidence coverage、deltas_vs_v0
+- `trajectory_benchmark.json`：冻结清单、blinded_input、`input_sha256`、`source_sha256`、`runtime_snapshot_id`
+- `trajectory_summary.json`：可提交的精简对比（不含完整 8MB trace）
+- `trajectory_score.json`：可选完整轨迹，继续作为外部产物
+
+口径：
+
+- `trajectory_success` 要求合法 verdict、最终 Evidence Gate 通过、无 Planner fallback、无缓存命中、无 Agent/Tool 失败
+- `evidence_coverage` 按 `expected_evidence_requirements` 或去重 Evidence ID 计算，忽略 `skipped_by_plan` 占位
+- `agent_calls` / `agent_attempts` / `replan_agent_calls` 来自 runtime lifecycle 与 P7 两轮 trace
+- `tool_argument_valid_rate` 使用显式参数 Schema 校验，不是 status 代理
+- `invokes_models` / `invokes_api` 从报告的 debate 后端与 model_calls 断言，不是硬编码
 
 该命令 **不修改** `malapp/config/defaults/eval/regression_gate.json`。发布门禁仍是恶意召回、良性误报、结构成功率等五类既有 gate。
 

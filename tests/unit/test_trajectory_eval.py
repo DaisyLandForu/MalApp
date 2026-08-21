@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -14,10 +16,12 @@ from malapp.evaluation.trajectory import (
     input_sha256,
     load_benchmark_manifest,
     run_rule_trajectory_benchmark,
+    score_evaluation_payload,
     score_reports,
     score_trajectory,
     summarize_trajectories,
     trajectory_success,
+    write_json,
 )
 
 
@@ -246,6 +250,7 @@ class TrajectoryEvalTest(unittest.TestCase):
         metrics = score_trajectory(traj)
         self.assertEqual(metrics["tool_argument_valid_rate"], 0.5)
         self.assertEqual(metrics["tool_denial_rate"], 0.5)
+        self.assertFalse(metrics["trajectory_success"])
 
     def test_rule_benchmark_compares_v0_v1_v2_without_model_calls(self) -> None:
         samples = [
@@ -329,6 +334,82 @@ class TrajectoryEvalTest(unittest.TestCase):
             path.write_text(json.dumps(tampered), encoding="utf-8")
             with self.assertRaises(ValueError):
                 load_benchmark_manifest(path)
+
+    def test_trajectory_success_requires_explicit_gate_and_rejects_denied_or_invalid_args(self) -> None:
+        traj = extract_trajectory(sample_report("v0_fixed", ["static_analysis"], []))
+        self.assertTrue(trajectory_success(traj))
+        missing_gate = dict(traj)
+        missing_gate["gate"] = {}
+        self.assertFalse(trajectory_success(missing_gate))
+        denied = dict(traj)
+        denied["tool_observations"] = [
+            {"tool_name": "network_indicator", "agent": "threat_intel", "status": "denied", "arguments_valid": True}
+        ]
+        self.assertFalse(trajectory_success(denied))
+        invalid_args = dict(traj)
+        invalid_args["tool_observations"] = [
+            {
+                "tool_name": "apk_metadata",
+                "agent": "static_analysis",
+                "status": "completed",
+                "arguments_valid": False,
+            }
+        ]
+        self.assertFalse(trajectory_success(invalid_args))
+
+    def test_generated_trajectory_score_file_roundtrips_sample_ids_and_success(self) -> None:
+        v0 = sample_report("v0_fixed", ["static_analysis", "threat_intel", "impersonation", "business_label"], [])
+        v1 = sample_report("v1_planner", ["static_analysis", "threat_intel"], ["impersonation", "business_label"])
+        first = score_reports(
+            [v0, v1],
+            requirements_by_sample={"S1": ["static_analysis", "threat_intel"]},
+        )
+        self.assertEqual([item["sample_id"] for item in first["trajectories"]], ["S1", "S1"])
+        self.assertTrue(first["trajectories"][0]["metrics"]["trajectory_success"])
+        with tempfile.TemporaryDirectory() as workdir:
+            reports_path = Path(workdir) / "trajectory_score.json"
+            output_path = Path(workdir) / "trajectory_score_roundtrip.json"
+            write_json(
+                reports_path,
+                {
+                    "manifest_sha256": "roundtrip",
+                    "comparison": first["comparison"],
+                    "trajectories": first["trajectories"],
+                },
+            )
+            second = score_evaluation_payload(json.loads(reports_path.read_text(encoding="utf-8")))
+            self.assertEqual([item["sample_id"] for item in second["trajectories"]], ["S1", "S1"])
+            self.assertEqual(
+                second["comparison"]["variants"]["v0_fixed"]["trajectory_success_rate"],
+                first["comparison"]["variants"]["v0_fixed"]["trajectory_success_rate"],
+            )
+            self.assertEqual(
+                second["comparison"]["variants"]["v1_planner"]["average_selected_agents"],
+                first["comparison"]["variants"]["v1_planner"]["average_selected_agents"],
+            )
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/evaluation/run_evaluation.py",
+                    "trajectory-score",
+                    "--reports",
+                    str(reports_path),
+                    "--output",
+                    str(output_path),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                cwd=str(Path(__file__).resolve().parents[2]),
+            )
+            self.assertIn("trajectory_success_rate", completed.stdout)
+            cli_result = json.loads(output_path.read_text(encoding="utf-8"))
+            self.assertEqual([item["sample_id"] for item in cli_result["trajectories"]], ["S1", "S1"])
+            self.assertTrue(cli_result["trajectories"][0]["metrics"]["trajectory_success"])
+            self.assertEqual(
+                cli_result["comparison"]["variants"]["v0_fixed"]["trajectory_success_rate"],
+                first["comparison"]["variants"]["v0_fixed"]["trajectory_success_rate"],
+            )
 
     def test_existing_regression_gate_policy_is_unchanged(self) -> None:
         from malapp.evaluation.gates import load_gate_policy

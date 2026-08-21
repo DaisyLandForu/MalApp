@@ -267,17 +267,15 @@ def cmd_trajectory_manifest(args: argparse.Namespace) -> None:
 
 
 def cmd_trajectory_score(args: argparse.Namespace) -> None:
-    """Score already persisted judgement reports. Does not call models."""
-    from malapp.evaluation.trajectory import score_reports
+    """Score judgement reports or already extracted trajectory payloads. Does not call models."""
+    from malapp.evaluation.trajectory import score_evaluation_payload
     from malapp.evaluation.trajectory import write_json as write_traj
 
-    reports = []
     if args.reports:
         payload = read_json(Path(args.reports), [])
-        reports = payload if isinstance(payload, list) else payload.get("reports") or payload.get("trajectories") or []
     else:
-        reports = load_reports(Path(args.data_dir) if args.data_dir else None)
-    result = score_reports(reports)
+        payload = load_reports(Path(args.data_dir) if args.data_dir else None)
+    result = score_evaluation_payload(payload)
     if args.output:
         write_traj(Path(args.output), result)
     print_json(result.get("comparison") or result)
@@ -928,7 +926,7 @@ def parser() -> argparse.ArgumentParser:
 
     traj_score = sub.add_parser(
         "trajectory-score",
-        help="score existing reports for V0/V1/V2 trajectory metrics; does not call models",
+        help="score judgement reports or a generated trajectory_score.json; does not call models",
     )
     traj_score.add_argument("--data-dir", default="")
     traj_score.add_argument("--reports", default="", help="optional JSON list of reports")

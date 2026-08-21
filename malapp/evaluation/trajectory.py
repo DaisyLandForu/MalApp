@@ -370,7 +370,7 @@ def trajectory_success(trajectory: dict[str, Any]) -> bool:
     if trajectory.get("cache_hit"):
         return False
     gate = trajectory.get("gate") if isinstance(trajectory.get("gate"), dict) else {}
-    if gate and gate.get("sufficient") is False:
+    if gate.get("sufficient") is not True:
         return False
     runtime_status = str(trajectory.get("runtime_status") or "").lower()
     if runtime_status in {"failed", "error"}:
@@ -386,7 +386,9 @@ def trajectory_success(trajectory: dict[str, Any]) -> bool:
         if status in {"failed", "timeout"} or failure in {"failed", "timeout", "exception"}:
             return False
     tools = [item for item in (trajectory.get("tool_observations") or []) if isinstance(item, dict)]
-    if any(item.get("status") in {"failed", "timeout"} for item in tools):
+    if any(item.get("status") in {"failed", "timeout", "denied"} for item in tools):
+        return False
+    if any(not _tool_arguments_valid(item) for item in tools):
         return False
     return True
 
@@ -477,7 +479,7 @@ def summarize_trajectories(items: Iterable[dict[str, Any]]) -> dict[str, Any]:
         "notes": [
             "Selected Agent Recall and Unnecessary Agent Rate are omitted without required-agent labels.",
             "Token/P50/P95 are only meaningful on real LLM backends; rule backends omit token claims.",
-            "trajectory_success requires a valid verdict, final evidence gate, no planner fallback, no cache hit, and no agent/tool failure.",
+            "trajectory_success requires a valid verdict, gate.sufficient is True, no planner fallback, no cache hit, and no agent/tool failure, denial, or invalid arguments.",
             "evidence_coverage uses expected_evidence_requirements or deduplicated evidence IDs; skipped_by_plan placeholders are excluded.",
         ],
     }
@@ -841,6 +843,41 @@ def _stratum_fixture(stratum: str) -> dict[str, Any]:
     return dict(fixtures[stratum])
 
 
+def is_extracted_trajectory(item: dict[str, Any]) -> bool:
+    if not isinstance(item, dict):
+        return False
+    if isinstance(item.get("sample"), dict) or isinstance(item.get("preprocess"), dict) or isinstance(item.get("decision"), dict):
+        return False
+    return "sample_id" in item and (
+        "selected_agents" in item or "orchestration_mode" in item or "metrics" in item or "gate" in item
+    )
+
+
+def as_trajectory(item: dict[str, Any]) -> dict[str, Any]:
+    if is_extracted_trajectory(item):
+        traj = {key: value for key, value in item.items() if key != "metrics"}
+        if not traj.get("sample_id"):
+            raise ValueError("extracted trajectory is missing sample_id")
+        return traj
+    return extract_trajectory(item)
+
+
+def score_evaluation_payload(
+    payload: Any,
+    *,
+    requirements_by_sample: dict[str, list[str]] | None = None,
+) -> dict[str, Any]:
+    if isinstance(payload, list):
+        items = payload
+    elif isinstance(payload, dict):
+        items = payload.get("reports") or payload.get("trajectories") or []
+        if not isinstance(items, list):
+            raise ValueError("evaluation payload reports/trajectories must be a list")
+    else:
+        raise ValueError("evaluation payload must be a list or object")
+    return score_reports(items, requirements_by_sample=requirements_by_sample)
+
+
 def score_reports(
     reports: list[dict[str, Any]],
     *,
@@ -849,19 +886,22 @@ def score_reports(
     by_mode: dict[str, list[dict[str, Any]]] = defaultdict(list)
     scored = []
     v0_by_sample = {}
-    trajectories = [extract_trajectory(report) for report in reports]
+    trajectories = [as_trajectory(item) for item in reports]
     for item in trajectories:
         if item.get("orchestration_mode") == "v0_fixed":
             v0_by_sample[item.get("sample_id")] = item
     requirements_by_sample = requirements_by_sample or {}
     for item in trajectories:
-        requirements = requirements_by_sample.get(str(item.get("sample_id") or ""))
+        sample_id = str(item.get("sample_id") or "")
+        requirements = requirements_by_sample.get(sample_id) or list(item.get("expected_evidence_requirements") or [])
         metrics = score_trajectory(
             item,
             v0_reference=v0_by_sample.get(item.get("sample_id")),
-            expected_evidence_requirements=requirements,
+            expected_evidence_requirements=requirements or None,
         )
         record = {**item, "metrics": metrics}
+        if requirements:
+            record["expected_evidence_requirements"] = requirements
         scored.append(record)
         by_mode[item.get("orchestration_mode") or "v0_fixed"].append(metrics)
     invokes_models = any(item.get("invokes_models") for item in trajectories)

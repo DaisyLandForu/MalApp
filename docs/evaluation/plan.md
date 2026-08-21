@@ -500,7 +500,7 @@ python scripts/evaluation/run_evaluation.py trajectory-run --size 150 --output o
 # 从已冻结 manifest 重放
 python scripts/evaluation/run_evaluation.py trajectory-run --manifest malapp/config/defaults/eval/trajectory_benchmark.json --output outputs/evaluation
 
-# 只对已有报告打分
+# 对原始 judgement reports，或已生成的 trajectory_score.json 再打分
 python scripts/evaluation/run_evaluation.py trajectory-score --reports outputs/evaluation/trajectory_score.json
 ```
 
@@ -512,7 +512,7 @@ python scripts/evaluation/run_evaluation.py trajectory-score --reports outputs/e
 
 口径：
 
-- `trajectory_success` 要求合法 verdict、最终 Evidence Gate 通过、无 Planner fallback、无缓存命中、无 Agent/Tool 失败
+- `trajectory_success` 要求合法 verdict、**`gate.sufficient is True`**、无 Planner fallback、无缓存命中、无 Agent/Tool 失败 / denied / 参数无效
 - `evidence_coverage` 按 `expected_evidence_requirements` 或去重 Evidence ID 计算，忽略 `skipped_by_plan` 占位
 - `agent_calls` / `agent_attempts` / `replan_agent_calls` 来自 runtime lifecycle 与 P7 两轮 trace
 - `tool_argument_valid_rate` 使用显式参数 Schema 校验，不是 status 代理

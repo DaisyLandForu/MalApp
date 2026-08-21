@@ -268,6 +268,55 @@ def cmd_trajectory_score(args: argparse.Namespace) -> None:
     print_json(result.get("comparison") or result)
 
 
+def cmd_trajectory_run(args: argparse.Namespace) -> None:
+    """Run V0/V1/V2 on a frozen trajectory subset using the rule backend."""
+    from malapp.evaluation.trajectory import (
+        ORCHESTRATION_MODES,
+        build_benchmark_manifest,
+        run_rule_trajectory_benchmark,
+    )
+    from malapp.evaluation.trajectory import write_json as write_traj
+
+    rows = load_validation_rows(Path(args.validation_csv))
+    smoke = int(args.limit or 0) > 0
+    manifest = build_benchmark_manifest(
+        rows,
+        size=args.limit if smoke else args.size,
+        runtime_snapshot_id=args.runtime_snapshot_id,
+        min_size=1 if smoke else 100,
+        max_size=args.limit if smoke else 200,
+    )
+    by_id = {row["_row_id"]: row for row in rows if row.get("_row_id")}
+    samples = [blind_model_input(by_id[item["sample_id"]]) for item in manifest["samples"] if item["sample_id"] in by_id]
+    output_dir = Path(args.output) if args.output else Path("outputs") / "evaluation"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    write_traj(output_dir / "trajectory_benchmark.json", manifest)
+    result = run_rule_trajectory_benchmark(samples, modes=ORCHESTRATION_MODES)
+    payload = {
+        "manifest_sha256": manifest["manifest_sha256"],
+        "manifest_size": manifest["size"],
+        "sample_count": result["sample_count"],
+        "backend": result["backend"],
+        "invokes_models": False,
+        "errors": result.get("errors") or [],
+        "comparison": result["comparison"],
+        "trajectories": result["trajectories"],
+    }
+    write_traj(output_dir / "trajectory_score.json", payload)
+    print_json(
+        {
+            "output": str(output_dir / "trajectory_score.json"),
+            "manifest": str(output_dir / "trajectory_benchmark.json"),
+            "sample_count": payload["sample_count"],
+            "invokes_models": False,
+            "errors": payload["errors"],
+            "comparison": payload["comparison"],
+        }
+    )
+    if payload["errors"]:
+        raise RuntimeError(f"trajectory run finished with {len(payload['errors'])} errors")
+
+
 def variant_config(args: argparse.Namespace) -> dict[str, Any]:
     variants = evaluation_plan()["experiment_variants"]
     if args.variant not in variants:
@@ -823,6 +872,25 @@ def parser() -> argparse.ArgumentParser:
     traj_score.add_argument("--reports", default="", help="optional JSON list of reports")
     traj_score.add_argument("--output", default="")
     traj_score.set_defaults(func=cmd_trajectory_score)
+
+    traj_run = sub.add_parser(
+        "trajectory-run",
+        help="run V0/V1/V2 on a frozen 100-200 subset with the rule backend; does not call LLM APIs",
+    )
+    traj_run.add_argument("--size", type=int, default=150, help="frozen subset size, clamped to 100-200")
+    traj_run.add_argument(
+        "--limit",
+        type=int,
+        default=0,
+        help="smoke override: run only N samples and skip the 100-sample floor",
+    )
+    traj_run.add_argument("--runtime-snapshot-id", default="")
+    traj_run.add_argument(
+        "--output",
+        default="",
+        help="directory for trajectory_benchmark.json and trajectory_score.json",
+    )
+    traj_run.set_defaults(func=cmd_trajectory_run)
 
     run = sub.add_parser("run", help="run one resumable experiment variant")
     run.add_argument("--variant", default="full")

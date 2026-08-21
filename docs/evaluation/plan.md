@@ -476,11 +476,40 @@ python -m scripts.evaluation.run_evaluation gate `
 任一门禁失败，回滚模型、Prompt、RAG索引、阈值和代码到同一个已验证快照，
 不能只回滚模型参数。
 
-## 7. 测试
+## 7. Agent 轨迹评测（V0 / V1 / V2）
+
+该层比较编排，不比较模型。默认走 **rule 后端 + no_debate**，不调用商用 API，也不需要本地开源大模型。
+
+冻结 100–200 条分层样本后，同一批样本分别跑：
+
+- `v0_fixed`：四 Agent 全开
+- `v1_planner`：Rule Planner 裁剪 Agent
+- `v2_planner_tools`：Planner + 确定性 Tool Runtime
+
+```powershell
+# 冒烟：4 条，不触发 100 条下限
+python scripts/evaluation/run_evaluation.py trajectory-run --limit 4 --output outputs/evaluation
+
+# 冻结并跑满 150 条规则轨迹（仍不调用 LLM）
+python scripts/evaluation/run_evaluation.py trajectory-run --size 150 --output outputs/evaluation
+
+# 只对已有报告打分
+python scripts/evaluation/run_evaluation.py trajectory-score --reports outputs/evaluation/trajectory_score.json
+```
+
+输出：
+
+- `trajectory_benchmark.json`：冻结清单与 `manifest_sha256`
+- `trajectory_score.json`：V0/V1/V2 对比，含 selected agents、tool calls、evidence coverage、deltas_vs_v0
+
+该命令 **不修改** `malapp/config/defaults/eval/regression_gate.json`。发布门禁仍是恶意召回、良性误报、结构成功率等五类既有 gate。
+
+## 8. 测试
 
 ```powershell
 python -m unittest tests.test_evaluation_framework
 python -m unittest discover -s tests
+python -m pytest tests/unit/test_trajectory_eval.py
 ```
 
 在正式批量评测前：

@@ -5,6 +5,7 @@ import unittest
 from malapp.evaluation.trajectory import (
     build_benchmark_manifest,
     extract_trajectory,
+    run_rule_trajectory_benchmark,
     score_reports,
     score_trajectory,
     summarize_trajectories,
@@ -104,6 +105,65 @@ class TrajectoryEvalTest(unittest.TestCase):
         self.assertTrue(metrics["trajectory_success"])
         summary = summarize_trajectories([metrics])
         self.assertIn("Selected Agent Recall", summary["notes"][0])
+
+    def test_rule_benchmark_compares_v0_v1_v2_without_model_calls(self) -> None:
+        import tempfile
+
+        samples = [
+            {
+                "sample_id": "p9-static-only",
+                "package_name": "com.example.app",
+                "signature_status": "valid",
+                "certificate_fingerprint": "abc",
+            },
+            {
+                "sample_id": "p9-ioc",
+                "package_name": "com.example.app",
+                "signature_status": "valid",
+                "control_url": "https://c2.example.test/gate",
+            },
+        ]
+        with tempfile.TemporaryDirectory(prefix="malapp-traj-test-") as workdir:
+            result = run_rule_trajectory_benchmark(samples, data_dir=workdir)
+        self.assertFalse(result["invokes_models"])
+        self.assertEqual(result["backend"], "rule")
+        self.assertEqual(result["errors"], [])
+        self.assertEqual(result["sample_count"], 2)
+        comparison = result["comparison"]
+        self.assertEqual(comparison["variants"]["v0_fixed"]["average_selected_agents"], 4.0)
+        self.assertLess(
+            comparison["variants"]["v1_planner"]["average_selected_agents"],
+            comparison["variants"]["v0_fixed"]["average_selected_agents"],
+        )
+        self.assertGreater(comparison["variants"]["v2_planner_tools"]["average_tool_calls"], 0)
+        self.assertIn("v1_planner", comparison["deltas_vs_v0"])
+        self.assertIn("v2_planner_tools", comparison["deltas_vs_v0"])
+        by_mode: dict[str, list] = {}
+        for item in result["trajectories"]:
+            by_mode.setdefault(item["orchestration_mode"], []).append(item)
+            self.assertEqual(item["metrics"]["token_usage"].get("note"), "rule_backend_tokens_omitted")
+        static_v1 = next(
+            item for item in by_mode["v1_planner"] if item["sample_id"] == "p9-static-only"
+        )
+        self.assertIn("threat_intel", static_v1["skipped_agents"])
+        ioc_v2 = next(item for item in by_mode["v2_planner_tools"] if item["sample_id"] == "p9-ioc")
+        self.assertGreater(ioc_v2["metrics"]["tool_calls"], 0)
+        self.assertTrue(any(obs.get("tool_name") == "network_indicator" for obs in ioc_v2["tool_observations"]))
+
+    def test_existing_regression_gate_policy_is_unchanged(self) -> None:
+        from malapp.evaluation.gates import load_gate_policy
+
+        policy = load_gate_policy()
+        self.assertEqual(
+            [item["id"] for item in policy["gates"]],
+            [
+                "malicious_recall_not_below_baseline",
+                "benign_fpr_no_significant_increase",
+                "structured_output_success",
+                "high_confidence_errors_not_increase",
+                "wrong_rag_citations_not_increase",
+            ],
+        )
 
 
 if __name__ == "__main__":

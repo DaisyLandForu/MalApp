@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import tempfile
 from collections import defaultdict
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +15,33 @@ from malapp.agents.evidence_contract import AGENT_ORDER
 from malapp.evaluation.framework import DEFAULT_VALIDATION_CSV, _as_float, _clean, now_iso
 
 ORCHESTRATION_MODES = ("v0_fixed", "v1_planner", "v2_planner_tools")
+RULE_TRAJECTORY_ENV = {
+    "MALAPP_PROFILE": "demo",
+    "MALAPP_RAG_ENABLED": "0",
+    "MALAPP_USE_XGB": "0",
+    "MALAPP_MD5_REPORT_CACHE": "0",
+    "MALAPP_USE_SERVER_MODELS": "0",
+    "MALAPP_USE_LOCAL_QWEN": "0",
+}
+ORCHESTRATION_ENV = {
+    "v0_fixed": {
+        "MALAPP_PLANNER_ENABLED": "0",
+        "MALAPP_TOOL_RUNTIME_ENABLED": "0",
+        "MALAPP_ORCHESTRATION_MODE": "v0_fixed",
+    },
+    "v1_planner": {
+        "MALAPP_PLANNER_ENABLED": "1",
+        "MALAPP_PLANNER_MODE": "rule",
+        "MALAPP_TOOL_RUNTIME_ENABLED": "0",
+        "MALAPP_ORCHESTRATION_MODE": "v1_planner",
+    },
+    "v2_planner_tools": {
+        "MALAPP_PLANNER_ENABLED": "1",
+        "MALAPP_PLANNER_MODE": "rule",
+        "MALAPP_TOOL_RUNTIME_ENABLED": "1",
+        "MALAPP_ORCHESTRATION_MODE": "v2_planner_tools",
+    },
+}
 STRATA = (
     "malicious",
     "benign",
@@ -223,6 +252,10 @@ def compare_variants(by_mode: dict[str, list[dict[str, Any]]]) -> dict[str, Any]
                 float(stats.get("average_agent_calls") or 0) - float(v0.get("average_agent_calls") or 0),
                 4,
             ),
+            "average_tool_calls": round(
+                float(stats.get("average_tool_calls") or 0) - float(v0.get("average_tool_calls") or 0),
+                4,
+            ),
         }
     return {"variants": summary, "deltas_vs_v0": deltas}
 
@@ -252,8 +285,10 @@ def build_benchmark_manifest(
     *,
     size: int = 150,
     runtime_snapshot_id: str = "",
+    min_size: int = 100,
+    max_size: int = 200,
 ) -> dict[str, Any]:
-    size = max(100, min(int(size), 200))
+    size = max(int(min_size), min(int(size), int(max_size)))
     buckets: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
         buckets[row_stratum(row)].append(row)
@@ -327,7 +362,80 @@ def score_reports(reports: list[dict[str, Any]]) -> dict[str, Any]:
         "created_at": now_iso(),
         "trajectories": scored,
         "comparison": compare_variants(by_mode),
+        "invokes_models": False,
     }
+
+
+def prepare_rule_trajectory_sample(sample: dict[str, Any]) -> dict[str, Any]:
+    prepared = dict(sample)
+    prepared.setdefault("force_engine_c", True)
+    return prepared
+
+
+def rule_trajectory_environment(mode: str, *, data_dir: str = "") -> dict[str, str]:
+    if mode not in ORCHESTRATION_ENV:
+        raise ValueError(f"unsupported orchestration mode: {mode}")
+    env = {**RULE_TRAJECTORY_ENV, **ORCHESTRATION_ENV[mode]}
+    if data_dir:
+        env["MALAPP_DATA_DIR"] = data_dir
+    return env
+
+
+def _swap_environ(env: dict[str, str]) -> dict[str, str | None]:
+    previous: dict[str, str | None] = {}
+    for key, value in env.items():
+        previous[key] = os.environ.get(key)
+        os.environ[key] = value
+    return previous
+
+
+def _restore_environ(previous: dict[str, str | None]) -> None:
+    for key, value in previous.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+
+
+def run_rule_trajectory_benchmark(
+    samples: list[dict[str, Any]],
+    *,
+    modes: tuple[str, ...] = ORCHESTRATION_MODES,
+    judge_fn: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    data_dir: str | Path | None = None,
+) -> dict[str, Any]:
+    """Run V0/V1/V2 on the same samples using the rule backend. No LLM/API calls."""
+    if judge_fn is None:
+        from malapp.application.judgement import judge as judge_fn
+    workdir = str(data_dir) if data_dir else tempfile.mkdtemp(prefix="malapp-traj-")
+    reports: list[dict[str, Any]] = []
+    errors: list[dict[str, str]] = []
+    for mode in modes:
+        previous = _swap_environ(rule_trajectory_environment(mode, data_dir=workdir))
+        try:
+            for sample in samples:
+                prepared = prepare_rule_trajectory_sample(sample)
+                try:
+                    report = judge_fn(prepared)
+                    reports.append(report)
+                except Exception as exc:
+                    errors.append(
+                        {
+                            "sample_id": str(prepared.get("sample_id") or prepared.get("md5") or ""),
+                            "orchestration_mode": mode,
+                            "error": f"{type(exc).__name__}: {exc}",
+                        }
+                    )
+        finally:
+            _restore_environ(previous)
+    scored = score_reports(reports)
+    scored["errors"] = errors
+    scored["sample_count"] = len(samples)
+    scored["modes"] = list(modes)
+    scored["data_dir"] = workdir
+    scored["backend"] = "rule"
+    scored["invokes_models"] = False
+    return scored
 
 
 def write_json(path: Path, value: Any) -> None:
